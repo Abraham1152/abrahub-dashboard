@@ -17,8 +17,6 @@ import {
   DollarSign,
   Users,
   AlertCircle,
-  Youtube,
-  Instagram,
   ArrowUpRight,
   ArrowDownRight,
   CheckCircle2,
@@ -31,31 +29,6 @@ import {
 export default function HomePage() {
   const { theme } = useTheme()
   const isDark = theme === 'dark'
-
-  const { data: youtubeData = [] } = useQuery({
-    queryKey: ['youtube-latest-all'],
-    queryFn: async () => {
-      const { data } = await supabase
-        .from('youtube_daily')
-        .select('*')
-        .order('date', { ascending: false })
-        .limit(10)
-      return data || []
-    },
-  })
-
-  const { data: instagramLatest } = useQuery({
-    queryKey: ['instagram-latest'],
-    queryFn: async () => {
-      const { data } = await supabase
-        .from('instagram_daily')
-        .select('*')
-        .order('date', { ascending: false })
-        .limit(1)
-        .maybeSingle()
-      return data
-    },
-  })
 
   const { data: financialData = [] } = useQuery({
     queryKey: ['financial-30d'],
@@ -98,11 +71,6 @@ export default function HomePage() {
 
   const churnRate = churnData?.churn_percentage || 0
   const isChurnHigh = churnRate > 5
-
-  const latestDate = youtubeData[0]?.date
-  const latestYtChannels = youtubeData.filter(d => d.date === latestDate)
-  const totalSubs = latestYtChannels.reduce((s, d) => s + (d.subscribers || 0), 0)
-  const totalViewsToday = latestYtChannels.reduce((s, d) => s + (d.views_gained || 0), 0)
 
   const BRL = (v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
 
@@ -190,53 +158,6 @@ export default function HomePage() {
           <SideCard label="Stripe" value={BRL(financialData.reduce((s, d) => s + d.revenue_stripe, 0))} color="blue" pct={totalRevenue > 0 ? financialData.reduce((s, d) => s + d.revenue_stripe, 0) / totalRevenue * 100 : 0} />
           <SideCard label="Kiwify" value={BRL(financialData.reduce((s, d) => s + d.revenue_kiwify, 0))} color="emerald" pct={totalRevenue > 0 ? financialData.reduce((s, d) => s + d.revenue_kiwify, 0) / totalRevenue * 100 : 0} />
           <SideCard label="Liquida" value={BRL(netRevenue)} color="violet" pct={100} />
-        </div>
-      </div>
-
-      {/* Social Overview */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="card p-6">
-          <div className="flex items-center gap-3 mb-5">
-            <div className="w-10 h-10 rounded-xl bg-red-50 dark:bg-red-500/10 flex items-center justify-center">
-              <Youtube size={22} className="text-red-500" />
-            </div>
-            <div>
-              <h2 className="font-semibold text-gray-900 dark:text-white">YouTube</h2>
-              <p className="text-xs text-gray-400 dark:text-neutral-500">3 canais</p>
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <p className="text-xs text-gray-500 dark:text-neutral-500 mb-1">Inscritos</p>
-              <p className="text-2xl font-bold text-red-500">{totalSubs.toLocaleString('pt-BR')}</p>
-            </div>
-            <div>
-              <p className="text-xs text-gray-500 dark:text-neutral-500 mb-1">Views Hoje</p>
-              <p className="text-2xl font-bold text-gray-900 dark:text-white">{totalViewsToday.toLocaleString('pt-BR')}</p>
-            </div>
-          </div>
-        </div>
-
-        <div className="card p-6">
-          <div className="flex items-center gap-3 mb-5">
-            <div className="w-10 h-10 rounded-xl bg-pink-50 dark:bg-pink-500/10 flex items-center justify-center">
-              <Instagram size={22} className="text-pink-500" />
-            </div>
-            <div>
-              <h2 className="font-semibold text-gray-900 dark:text-white">Instagram</h2>
-              <p className="text-xs text-gray-400 dark:text-neutral-500">{instagramLatest ? 'Sincronizado' : 'Aguardando token'}</p>
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <p className="text-xs text-gray-500 dark:text-neutral-500 mb-1">Seguidores</p>
-              <p className="text-2xl font-bold text-pink-500">{instagramLatest?.followers?.toLocaleString('pt-BR') || '---'}</p>
-            </div>
-            <div>
-              <p className="text-xs text-gray-500 dark:text-neutral-500 mb-1">Alcance</p>
-              <p className="text-2xl font-bold text-gray-900 dark:text-white">{instagramLatest?.reach?.toLocaleString('pt-BR') || '---'}</p>
-            </div>
-          </div>
         </div>
       </div>
 

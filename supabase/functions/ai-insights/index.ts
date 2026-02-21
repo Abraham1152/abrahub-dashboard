@@ -152,13 +152,16 @@ function buildBusinessContext(data: {
     const totalStripe = data.financial.reduce((s, r) => s + (Number(r.revenue_stripe) || 0), 0)
     const totalKiwify = data.financial.reduce((s, r) => s + (Number(r.revenue_kiwify) || 0), 0)
     const totalRefunds = data.financial.reduce((s, r) => s + (Number(r.refunds) || 0), 0)
+    const totalAdsense = data.financial.reduce((s, r) => s + (Number(r.revenue_adsense) || 0), 0)
     const totalFees = data.financial.reduce((s, r) => s + (Number(r.fees) || 0), 0)
-    const netRevenue = totalStripe + totalKiwify - totalRefunds - totalFees
+    const totalAll = totalStripe + totalKiwify + totalAdsense
+    const netRevenue = totalAll - totalRefunds - totalFees
     parts.push(`FINANCEIRO (30 dias):
 - Receita Stripe: R$ ${totalStripe.toFixed(2)}
 - Receita Kiwify: R$ ${totalKiwify.toFixed(2)}
-- Receita Total: R$ ${(totalStripe + totalKiwify).toFixed(2)}
-- Reembolsos: R$ ${totalRefunds.toFixed(2)} (${((totalRefunds / (totalStripe + totalKiwify || 1)) * 100).toFixed(1)}%)
+- Receita AdSense (YouTube): R$ ${totalAdsense.toFixed(2)}
+- Receita Total: R$ ${totalAll.toFixed(2)}
+- Reembolsos: R$ ${totalRefunds.toFixed(2)} (${((totalRefunds / (totalAll || 1)) * 100).toFixed(1)}%)
 - Taxas: R$ ${totalFees.toFixed(2)}
 - Receita Liquida: R$ ${netRevenue.toFixed(2)}
 - Media Diaria: R$ ${(netRevenue / (data.financial.length || 1)).toFixed(2)}`)

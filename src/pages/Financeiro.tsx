@@ -37,7 +37,10 @@ const BRL = (v: number) =>
 
 const COLORS = {
   stripe: '#635bff',
+  stripe_monthly: '#635bff',
+  stripe_annual: '#8b5cf6',
   kiwify: '#00c853',
+  adsense: '#fbbc04',
   recurring: '#3b82f6',
   annual: '#8b5cf6',
   one_time: '#f59e0b',
@@ -197,7 +200,11 @@ export default function FinanceiroPage() {
   const netRevenue = totalRevenue - totalRefunds
 
   const stripeRevenue = paidTx.filter((t: any) => t.source === 'stripe').reduce((s: number, t: any) => s + t.amount, 0)
+  const stripeMonthlyRev = paidTx.filter((t: any) => t.source === 'stripe' && t.type === 'recurring').reduce((s: number, t: any) => s + t.amount, 0)
+  const stripeAnnualRev = paidTx.filter((t: any) => t.source === 'stripe' && t.type === 'annual').reduce((s: number, t: any) => s + t.amount, 0)
+  const stripeOtherRev = stripeRevenue - stripeMonthlyRev - stripeAnnualRev
   const kiwifyRevenue = paidTx.filter((t: any) => t.source === 'kiwify').reduce((s: number, t: any) => s + t.amount, 0)
+  const adsenseRevenue = paidTx.filter((t: any) => t.source === 'adsense').reduce((s: number, t: any) => s + t.amount, 0)
 
   const recurringRevenue = paidTx.filter((t: any) => t.type === 'recurring').reduce((s: number, t: any) => s + t.amount, 0)
   const annualRevenue = paidTx.filter((t: any) => t.type === 'annual').reduce((s: number, t: any) => s + t.amount, 0)
@@ -214,8 +221,11 @@ export default function FinanceiroPage() {
     .slice(0, 8)
 
   const sourceData = [
-    { name: 'Stripe', value: stripeRevenue, color: COLORS.stripe },
+    { name: 'Stripe Mensal', value: stripeMonthlyRev, color: COLORS.stripe_monthly },
+    { name: 'Stripe Anual', value: stripeAnnualRev, color: COLORS.stripe_annual },
+    ...(stripeOtherRev > 0 ? [{ name: 'Stripe Avulso', value: stripeOtherRev, color: '#a78bfa' }] : []),
     { name: 'Kiwify', value: kiwifyRevenue, color: COLORS.kiwify },
+    { name: 'AdSense', value: adsenseRevenue, color: COLORS.adsense },
   ].filter((d) => d.value > 0)
 
   const typeData = [
@@ -228,7 +238,8 @@ export default function FinanceiroPage() {
     date: d.date.slice(5),
     stripe: d.revenue_stripe || 0,
     kiwify: d.revenue_kiwify || 0,
-    total: (d.revenue_stripe || 0) + (d.revenue_kiwify || 0),
+    adsense: d.revenue_adsense || 0,
+    total: (d.revenue_stripe || 0) + (d.revenue_kiwify || 0) + (d.revenue_adsense || 0),
   }))
 
   const avgDaily = totalRevenue / period
@@ -344,17 +355,51 @@ export default function FinanceiroPage() {
           {/* Receitas */}
           <div className="card p-6">
             <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Receitas - {monthLabel}</h3>
-            <div className="space-y-3">
-              <PLRow label="Stripe" value={monthPaidTx.filter((t: any) => t.source === 'stripe').reduce((s: number, t: any) => s + Math.abs(t.amount), 0)} color={COLORS.stripe} />
-              <PLRow label="Kiwify" value={monthPaidTx.filter((t: any) => t.source === 'kiwify').reduce((s: number, t: any) => s + Math.abs(t.amount), 0)} color={COLORS.kiwify} />
-              <div className="border-t border-gray-200 dark:border-neutral-800 pt-2">
-                <PLRow label="Receita Bruta" value={monthTotalRevenue} bold />
-              </div>
-              <PLRow label="(-) Reembolsos" value={-monthTotalRefunds} color={COLORS.refund} />
-              <div className="border-t border-gray-200 dark:border-neutral-800 pt-2">
-                <PLRow label="Receita Liquida" value={monthNetRevenue} bold color="#10b981" />
-              </div>
-            </div>
+            {(() => {
+              const stripeMonthly = monthPaidTx.filter((t: any) => t.source === 'stripe' && t.type === 'recurring').reduce((s: number, t: any) => s + Math.abs(t.amount), 0)
+              const stripeAnnual = monthPaidTx.filter((t: any) => t.source === 'stripe' && t.type === 'annual').reduce((s: number, t: any) => s + Math.abs(t.amount), 0)
+              const stripeOther = monthPaidTx.filter((t: any) => t.source === 'stripe' && t.type !== 'recurring' && t.type !== 'annual').reduce((s: number, t: any) => s + Math.abs(t.amount), 0)
+              const stripeTotal = stripeMonthly + stripeAnnual + stripeOther
+              const kiwifyTotal = monthPaidTx.filter((t: any) => t.source === 'kiwify').reduce((s: number, t: any) => s + Math.abs(t.amount), 0)
+              const adsenseTotal = monthPaidTx.filter((t: any) => t.source === 'adsense').reduce((s: number, t: any) => s + Math.abs(t.amount), 0)
+              return (
+                <div className="space-y-3">
+                  {/* Stripe breakdown */}
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: COLORS.stripe }} />
+                    <span className="text-xs font-semibold text-gray-500 dark:text-neutral-500 uppercase tracking-wider">Stripe</span>
+                  </div>
+                  {stripeMonthly > 0 && <PLRow label="  Assinaturas Mensais" value={stripeMonthly} color={COLORS.stripe_monthly} />}
+                  {stripeAnnual > 0 && <PLRow label="  Assinaturas Anuais" value={stripeAnnual} color={COLORS.stripe_annual} />}
+                  {stripeOther > 0 && <PLRow label="  Vendas Avulsas" value={stripeOther} color={COLORS.one_time} />}
+                  {stripeTotal > 0 && <PLRow label="  Subtotal Stripe" value={stripeTotal} color={COLORS.stripe} bold />}
+
+                  {/* Kiwify */}
+                  {kiwifyTotal > 0 && (
+                    <>
+                      <div className="border-t border-gray-100 dark:border-neutral-800/50 pt-2 mt-2" />
+                      <PLRow label="Kiwify" value={kiwifyTotal} color={COLORS.kiwify} />
+                    </>
+                  )}
+
+                  {/* AdSense */}
+                  {adsenseTotal > 0 && (
+                    <>
+                      <div className="border-t border-gray-100 dark:border-neutral-800/50 pt-2 mt-2" />
+                      <PLRow label="YouTube AdSense" value={adsenseTotal} color={COLORS.adsense} />
+                    </>
+                  )}
+
+                  <div className="border-t border-gray-200 dark:border-neutral-800 pt-2">
+                    <PLRow label="Receita Bruta" value={monthTotalRevenue} bold />
+                  </div>
+                  <PLRow label="(-) Reembolsos" value={-monthTotalRefunds} color={COLORS.refund} />
+                  <div className="border-t border-gray-200 dark:border-neutral-800 pt-2">
+                    <PLRow label="Receita Liquida" value={monthNetRevenue} bold color="#10b981" />
+                  </div>
+                </div>
+              )
+            })()}
           </div>
 
           {/* Despesas */}
@@ -467,6 +512,10 @@ export default function FinanceiroPage() {
                 <span className="w-3 h-3 rounded-full" style={{ backgroundColor: COLORS.kiwify }} />
                 Kiwify
               </span>
+              <span className="flex items-center gap-1.5">
+                <span className="w-3 h-3 rounded-full" style={{ backgroundColor: COLORS.adsense }} />
+                AdSense
+              </span>
             </div>
           </div>
           <ResponsiveContainer width="100%" height={280}>
@@ -480,17 +529,25 @@ export default function FinanceiroPage() {
                   <stop offset="5%" stopColor={COLORS.kiwify} stopOpacity={0.3} />
                   <stop offset="95%" stopColor={COLORS.kiwify} stopOpacity={0} />
                 </linearGradient>
+                <linearGradient id="gradAdsense" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor={COLORS.adsense} stopOpacity={0.3} />
+                  <stop offset="95%" stopColor={COLORS.adsense} stopOpacity={0} />
+                </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke={isDark ? '#27272a' : '#f3f4f6'} vertical={false} />
               <XAxis dataKey="date" stroke={isDark ? '#52525b' : '#9ca3af'} fontSize={11} tickLine={false} axisLine={false} />
               <YAxis stroke={isDark ? '#52525b' : '#9ca3af'} fontSize={11} tickLine={false} axisLine={false} tickFormatter={(v) => `R$${v}`} />
               <Tooltip
                 contentStyle={tooltipStyle}
-                formatter={(value: number, name: string) => [BRL(value), name === 'stripe' ? 'Stripe' : 'Kiwify']}
+                formatter={(value: number, name: string) => {
+                  const labels: Record<string, string> = { stripe: 'Stripe', kiwify: 'Kiwify', adsense: 'AdSense' }
+                  return [BRL(value), labels[name] || name]
+                }}
                 labelStyle={{ color: isDark ? '#a1a1aa' : '#6b7280' }}
               />
               <Area type="monotone" dataKey="stripe" stroke={COLORS.stripe} fill="url(#gradStripe)" strokeWidth={2} />
               <Area type="monotone" dataKey="kiwify" stroke={COLORS.kiwify} fill="url(#gradKiwify)" strokeWidth={2} />
+              <Area type="monotone" dataKey="adsense" stroke={COLORS.adsense} fill="url(#gradAdsense)" strokeWidth={2} />
             </AreaChart>
           </ResponsiveContainer>
         </div>
@@ -505,6 +562,10 @@ export default function FinanceiroPage() {
           <div className="card p-5">
             <p className="text-xs text-gray-500 dark:text-neutral-500 uppercase tracking-wider mb-2">Stripe</p>
             <p className="text-2xl font-bold" style={{ color: COLORS.stripe }}>{BRL(stripeRevenue)}</p>
+            <div className="flex gap-4 mt-1.5 text-[10px] text-gray-400 dark:text-neutral-500">
+              {stripeMonthlyRev > 0 && <span>Mensal: {BRL(stripeMonthlyRev)}</span>}
+              {stripeAnnualRev > 0 && <span>Anual: {BRL(stripeAnnualRev)}</span>}
+            </div>
             <div className="mt-2 h-1.5 bg-gray-100 dark:bg-neutral-800 rounded-full overflow-hidden">
               <div className="h-full rounded-full" style={{ width: `${totalRevenue > 0 ? (stripeRevenue / totalRevenue * 100) : 0}%`, backgroundColor: COLORS.stripe }} />
             </div>
@@ -516,6 +577,15 @@ export default function FinanceiroPage() {
               <div className="h-full rounded-full" style={{ width: `${totalRevenue > 0 ? (kiwifyRevenue / totalRevenue * 100) : 0}%`, backgroundColor: COLORS.kiwify }} />
             </div>
           </div>
+          {adsenseRevenue > 0 && (
+            <div className="card p-5">
+              <p className="text-xs text-gray-500 dark:text-neutral-500 uppercase tracking-wider mb-2">YouTube AdSense</p>
+              <p className="text-2xl font-bold" style={{ color: COLORS.adsense }}>{BRL(adsenseRevenue)}</p>
+              <div className="mt-2 h-1.5 bg-gray-100 dark:bg-neutral-800 rounded-full overflow-hidden">
+                <div className="h-full rounded-full" style={{ width: `${totalRevenue > 0 ? (adsenseRevenue / totalRevenue * 100) : 0}%`, backgroundColor: COLORS.adsense }} />
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
