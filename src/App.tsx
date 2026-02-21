@@ -14,6 +14,7 @@ import ExpensesPage from '@/pages/Expenses'
 import InstaNinjaPage from '@/pages/InstaNinja'
 import AdsManagerPage from '@/pages/AdsManager'
 import HumanAgentPage from '@/pages/HumanAgent'
+import EmailAgentPage from '@/pages/EmailAgent'
 import PrivacyPage from '@/pages/Privacy'
 
 function AuthenticatedApp() {
@@ -31,6 +32,7 @@ function AuthenticatedApp() {
         <Route path="/insta-ninja" element={<InstaNinjaPage />} />
         <Route path="/ads" element={<AdsManagerPage />} />
         <Route path="/human-agent" element={<HumanAgentPage />} />
+        <Route path="/email-agent" element={<EmailAgentPage />} />
         <Route path="*" element={<Navigate to="/" />} />
       </Routes>
     </DashboardLayout>
