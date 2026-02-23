@@ -54,25 +54,40 @@ serve(async (req) => {
 
     let insightsWarning = ''
     try {
-      // v21.0 valid metrics with metric_type=total_value
-      const insightsData = await igFetch(
-        `${GRAPH_API}/${userId}/insights?metric=reach,profile_views,accounts_engaged,total_interactions&metric_type=total_value&period=day&access_token=${accessToken}`
-      )
+      // v21.0: metric_type=total_value requires since/until params
+      const now = new Date()
+      const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000)
+      const since = Math.floor(yesterday.getTime() / 1000)
+      const until = Math.floor(now.getTime() / 1000)
 
+      const insightsData = await igFetch(
+        `${GRAPH_API}/${userId}/insights?metric=reach,profile_views,accounts_engaged,total_interactions&metric_type=total_value&period=day&since=${since}&until=${until}&access_token=${accessToken}`
+      )
       if (insightsData.error) {
         const err = insightsData.error as Record<string, unknown>
         insightsWarning = `Insights API: ${err.message || JSON.stringify(err)}`
       } else {
         const insightsArr = (insightsData.data as Array<Record<string, unknown>>) || []
         for (const metric of insightsArr) {
-          const values = metric.values as Array<Record<string, unknown>> | undefined
-          const latestValue = values?.[values.length - 1]?.value as number || 0
-          if (metric.name === 'reach') reach = latestValue
-          if (metric.name === 'profile_views') profileViews = latestValue
-          if (metric.name === 'accounts_engaged') accountsEngaged = latestValue
-          if (metric.name === 'total_interactions') totalInteractions = latestValue
+          // total_value metrics have a different structure: { total_value: { value: N } } or direct total_value
+          const tv = metric.total_value as Record<string, unknown> | number | undefined
+          let val = 0
+          if (typeof tv === 'number') {
+            val = tv
+          } else if (tv && typeof tv === 'object' && 'value' in tv) {
+            val = (tv.value as number) || 0
+          }
+          // Also check values array (legacy structure)
+          if (val === 0) {
+            const values = metric.values as Array<Record<string, unknown>> | undefined
+            val = (values?.[values.length - 1]?.value as number) || 0
+          }
+
+          if (metric.name === 'reach') reach = val
+          if (metric.name === 'profile_views') profileViews = val
+          if (metric.name === 'accounts_engaged') accountsEngaged = val
+          if (metric.name === 'total_interactions') totalInteractions = val
         }
-        // Use total_interactions as a proxy for impressions (engagement-based)
         impressions = totalInteractions || accountsEngaged || 0
       }
     } catch (e) {
@@ -194,6 +209,10 @@ serve(async (req) => {
       followers,
       media_count: mediaCount,
       posts_synced: postRows.length,
+      reach,
+      profile_views: profileViews,
+      accounts_engaged: accountsEngaged,
+      total_interactions: totalInteractions,
       ...(insightsWarning ? { insights_warning: insightsWarning } : {}),
     })
 
