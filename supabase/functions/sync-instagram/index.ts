@@ -1,7 +1,7 @@
 import { serve } from 'https://deno.land/std@0.208.0/http/server.ts'
 import { getServiceClient, logSync, jsonResponse, corsHeaders, todayDate } from '../_shared/supabase-client.ts'
 
-const GRAPH_API = 'https://graph.instagram.com/v21.0'
+const GRAPH_API = 'https://graph.facebook.com/v21.0'
 
 async function igFetch(url: string): Promise<Record<string, unknown>> {
   const res = await fetch(url)
@@ -33,7 +33,7 @@ serve(async (req) => {
 
     // --- Fetch Account Info ---
     const accountData = await igFetch(
-      `${GRAPH_API}/me?fields=user_id,username,followers_count,follows_count,media_count&access_token=${accessToken}`
+      `${GRAPH_API}/${userId}?fields=id,username,followers_count,follows_count,media_count&access_token=${accessToken}`
     )
 
     if (accountData.error) {
@@ -49,22 +49,34 @@ serve(async (req) => {
     let reach = 0
     let impressions = 0
     let profileViews = 0
+    let accountsEngaged = 0
+    let totalInteractions = 0
 
+    let insightsWarning = ''
     try {
+      // v21.0 valid metrics with metric_type=total_value
       const insightsData = await igFetch(
-        `${GRAPH_API}/${userId}/insights?metric=reach,impressions,profile_views&period=day&access_token=${accessToken}`
+        `${GRAPH_API}/${userId}/insights?metric=reach,profile_views,accounts_engaged,total_interactions&metric_type=total_value&period=day&access_token=${accessToken}`
       )
 
-      const insightsArr = (insightsData.data as Array<Record<string, unknown>>) || []
-      for (const metric of insightsArr) {
-        const values = metric.values as Array<Record<string, unknown>> | undefined
-        const latestValue = values?.[values.length - 1]?.value as number || 0
-        if (metric.name === 'reach') reach = latestValue
-        if (metric.name === 'impressions') impressions = latestValue
-        if (metric.name === 'profile_views') profileViews = latestValue
+      if (insightsData.error) {
+        const err = insightsData.error as Record<string, unknown>
+        insightsWarning = `Insights API: ${err.message || JSON.stringify(err)}`
+      } else {
+        const insightsArr = (insightsData.data as Array<Record<string, unknown>>) || []
+        for (const metric of insightsArr) {
+          const values = metric.values as Array<Record<string, unknown>> | undefined
+          const latestValue = values?.[values.length - 1]?.value as number || 0
+          if (metric.name === 'reach') reach = latestValue
+          if (metric.name === 'profile_views') profileViews = latestValue
+          if (metric.name === 'accounts_engaged') accountsEngaged = latestValue
+          if (metric.name === 'total_interactions') totalInteractions = latestValue
+        }
+        // Use total_interactions as a proxy for impressions (engagement-based)
+        impressions = totalInteractions || accountsEngaged || 0
       }
-    } catch {
-      // Insights may not be available for all accounts
+    } catch (e) {
+      insightsWarning = `Insights exception: ${e instanceof Error ? e.message : String(e)}`
     }
 
     // Upsert daily stats
@@ -86,7 +98,7 @@ serve(async (req) => {
 
     // --- Fetch Recent Media ---
     const mediaData = await igFetch(
-      `${GRAPH_API}/me/media?fields=id,media_type,caption,permalink,timestamp,like_count,comments_count,thumbnail_url,media_url&limit=25&access_token=${accessToken}`
+      `${GRAPH_API}/${userId}/media?fields=id,media_type,caption,permalink,timestamp,like_count,comments_count,thumbnail_url,media_url&limit=25&access_token=${accessToken}`
     )
 
     if (mediaData.error) {
@@ -106,20 +118,25 @@ serve(async (req) => {
       let postShares = 0
 
       try {
+        // Media insights: reach, likes, comments, shares, saved are valid for posts
         const postInsightsData = await igFetch(
-          `${GRAPH_API}/${post.id}/insights?metric=reach,impressions,saved,shares&access_token=${accessToken}`
+          `${GRAPH_API}/${post.id}/insights?metric=reach,likes,comments,shares,saved&access_token=${accessToken}`
         )
-        const metrics = (postInsightsData.data as Array<Record<string, unknown>>) || []
-        for (const metric of metrics) {
-          const values = metric.values as Array<Record<string, unknown>> | undefined
-          const val = (values?.[0]?.value as number) || 0
-          if (metric.name === 'reach') postReach = val
-          if (metric.name === 'impressions') postImpressions = val
-          if (metric.name === 'saved') postSaves = val
-          if (metric.name === 'shares') postShares = val
+        if (postInsightsData.data) {
+          const metrics = (postInsightsData.data as Array<Record<string, unknown>>) || []
+          for (const metric of metrics) {
+            const values = metric.values as Array<Record<string, unknown>> | undefined
+            const val = (values?.[0]?.value as number) || 0
+            if (metric.name === 'reach') postReach = val
+            if (metric.name === 'likes') postImpressions += val
+            if (metric.name === 'comments') postImpressions += val
+            if (metric.name === 'saved') postSaves = val
+            if (metric.name === 'shares') postShares = val
+          }
         }
       } catch {
-        // Some posts may not have insights
+        // Some posts may not have insights — use basic metrics from the post object
+        postImpressions = ((post.like_count as number) || 0) + ((post.comments_count as number) || 0)
       }
 
       // Determine the best thumbnail URL based on media type:
@@ -177,6 +194,7 @@ serve(async (req) => {
       followers,
       media_count: mediaCount,
       posts_synced: postRows.length,
+      ...(insightsWarning ? { insights_warning: insightsWarning } : {}),
     })
 
   } catch (error) {
