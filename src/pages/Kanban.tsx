@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { supabase } from '@/integrations/supabase'
 import { useState, DragEvent, useEffect } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import {
   Trash2,
   Plus,
@@ -63,7 +64,8 @@ export default function KanbanPage() {
   const [editingTask, setEditingTask] = useState<Task | null>(null)
   const [viewingTask, setViewingTask] = useState<Task | null>(null)
   const [addingTo, setAddingTo] = useState<{ person: string; status: Status } | null>(null)
-  const [activeTab, setActiveTab] = useState<'board' | 'agenda'>('board')
+  const [searchParams] = useSearchParams()
+  const [activeTab, setActiveTab] = useState<'board' | 'agenda'>(searchParams.get('tab') === 'agenda' ? 'agenda' : 'board')
   const [meetingFormDate, setMeetingFormDate] = useState<string | null>(null)
 
   // Auto-delete done tasks older than 7 days

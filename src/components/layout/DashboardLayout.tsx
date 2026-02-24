@@ -287,7 +287,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                 return (
                   <button
                     key={m.id}
-                    onClick={() => { setBellOpen(false); navigate('/kanban') }}
+                    onClick={() => { setBellOpen(false); navigate('/kanban?tab=agenda') }}
                     className="w-full text-left px-4 py-3 hover:bg-gray-50 dark:hover:bg-neutral-800 transition-colors border-b border-gray-50 dark:border-neutral-800 last:border-0"
                   >
                     <div className="flex items-start gap-3">
