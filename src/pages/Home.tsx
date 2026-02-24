@@ -89,7 +89,7 @@ export default function HomePage() {
   const [syncing, setSyncing] = useState(false)
   const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'done' | 'error'>('idle')
   const [syncProgress, setSyncProgress] = useState(0)
-  const [dateRange, setDateRange] = useState<DateRange>('30d')
+  const [dateRange, setDateRange] = useState<DateRange>('7d')
 
   const MONTH_NAMES = lang === 'pt' ? MONTH_NAMES_PT : MONTH_NAMES_EN
   const locale = lang === 'pt' ? 'pt-BR' : 'en-US'
