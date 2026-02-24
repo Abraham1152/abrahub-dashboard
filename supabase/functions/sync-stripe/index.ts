@@ -178,7 +178,7 @@ serve(async (req) => {
         if (!productName || productName === 'null') productName = 'Pagamento Stripe'
 
         // Upsert individual transaction
-        await supabase.from('revenue_transactions').upsert(
+        const { error: upsertErr } = await supabase.from('revenue_transactions').upsert(
           {
             date,
             source: 'stripe',
@@ -196,6 +196,9 @@ serve(async (req) => {
           },
           { onConflict: 'transaction_id' }
         )
+        if (upsertErr) {
+          console.error(`Stripe upsert failed for ${charge.id} (${date}):`, upsertErr.message)
+        }
         totalRecords++
       }
 
@@ -231,7 +234,7 @@ serve(async (req) => {
         dailyRefunds[date] = (dailyRefunds[date] || 0) + amount
 
         // Store refund as negative transaction
-        await supabase.from('revenue_transactions').upsert(
+        const { error: refundErr } = await supabase.from('revenue_transactions').upsert(
           {
             date,
             source: 'stripe',
@@ -245,6 +248,9 @@ serve(async (req) => {
           },
           { onConflict: 'transaction_id' }
         )
+        if (refundErr) {
+          console.error(`Stripe refund upsert failed for ${refund.id} (${date}):`, refundErr.message)
+        }
         totalRecords++
       }
 
@@ -269,16 +275,23 @@ serve(async (req) => {
         .maybeSingle()
 
       if (existing) {
-        await supabase
+        const { error: updateErr } = await supabase
           .from('financial_daily')
-          .update({ revenue_stripe: revenue, refunds, fees, updated_at: new Date().toISOString() })
+          .update({ revenue_stripe: revenue, refunds, fees })
           .eq('id', existing.id)
+        if (updateErr) console.error(`financial_daily update failed for ${date}:`, updateErr.message)
       } else {
-        await supabase
+        const { error: insertErr } = await supabase
           .from('financial_daily')
           .insert({ date, revenue_stripe: revenue, revenue_kiwify: 0, refunds, fees })
+        if (insertErr) console.error(`financial_daily insert failed for ${date}:`, insertErr.message)
       }
     }
+
+    // Collect date stats for diagnostics
+    const allRevDates = Object.keys(dailyRevenue).sort()
+    const latestDate = allRevDates[allRevDates.length - 1] || 'none'
+    const earliestDate = allRevDates[0] || 'none'
 
     await logSync('stripe', 'success', totalRecords)
     return jsonResponse({
@@ -286,6 +299,8 @@ serve(async (req) => {
       records: totalRecords,
       price_map: amountToInterval,
       customer_map_size: Object.keys(customerToInterval).length,
+      date_range: { earliest: earliestDate, latest: latestDate },
+      unique_dates: allRevDates.length,
     })
 
   } catch (error) {

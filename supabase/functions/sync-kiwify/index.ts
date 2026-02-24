@@ -37,10 +37,14 @@ serve(async (req) => {
 
     const token = tokenData.access_token
 
-    // --- Fetch Sales (last 90 days) ---
+    // --- Fetch Sales (last 89 days + tomorrow) ---
+    // Add 1 day buffer to end_date to capture sales that cross UTC midnight
+    // (e.g. Feb 23 22:11 BRT = Feb 24 01:11 UTC)
+    // Keep range at 90 days max (Kiwify limit)
     const endDate = new Date()
+    endDate.setDate(endDate.getDate() + 1)
     const startDate = new Date()
-    startDate.setDate(startDate.getDate() - 90)
+    startDate.setDate(startDate.getDate() - 89)
 
     const params = new URLSearchParams({
       start_date: startDate.toISOString().split('T')[0],
@@ -151,9 +155,14 @@ serve(async (req) => {
       .eq('amount', 0)
 
     // --- Batch upsert transactions (chunks of 200) ---
+    let upsertErrors = 0
     for (let i = 0; i < transactions.length; i += 200) {
       const chunk = transactions.slice(i, i + 200)
-      await supabase.from('revenue_transactions').upsert(chunk, { onConflict: 'transaction_id' })
+      const { error: upsertErr } = await supabase.from('revenue_transactions').upsert(chunk, { onConflict: 'transaction_id' })
+      if (upsertErr) {
+        console.error(`Kiwify upsert batch ${i}-${i + chunk.length} failed:`, upsertErr.message)
+        upsertErrors++
+      }
     }
 
     // --- Batch upsert financial_daily ---
@@ -190,16 +199,30 @@ serve(async (req) => {
       }
 
       if (toInsert.length > 0) {
-        await supabase.from('financial_daily').insert(toInsert)
+        const { error: insErr } = await supabase.from('financial_daily').insert(toInsert)
+        if (insErr) console.error('Kiwify financial_daily insert failed:', insErr.message)
       }
 
       for (const item of toUpdate) {
-        await supabase.from('financial_daily').update(item.data).eq('id', item.id)
+        const { error: updErr } = await supabase.from('financial_daily').update(item.data).eq('id', item.id)
+        if (updErr) console.error(`Kiwify financial_daily update failed for ${item.id}:`, updErr.message)
       }
     }
 
+    // Collect date stats for diagnostics
+    const allTxDates = transactions.map(t => t.date as string).filter(Boolean)
+    const uniqueDates = [...new Set(allTxDates)].sort()
+    const latestDate = uniqueDates[uniqueDates.length - 1] || 'none'
+    const earliestDate = uniqueDates[0] || 'none'
+
     await logSync('kiwify', 'success', totalRecords)
-    return jsonResponse({ success: true, records: totalRecords })
+    return jsonResponse({
+      success: true,
+      records: totalRecords,
+      upsert_errors: upsertErrors,
+      date_range: { earliest: earliestDate, latest: latestDate },
+      unique_dates: uniqueDates.length,
+    })
 
   } catch (error) {
     const msg = error instanceof Error ? error.message : 'Unknown error'
