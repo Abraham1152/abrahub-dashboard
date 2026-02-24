@@ -1,7 +1,8 @@
 import { serve } from 'https://deno.land/std@0.208.0/http/server.ts'
 import { getServiceClient, jsonResponse, corsHeaders } from '../_shared/supabase-client.ts'
 
-const IG_API = 'https://graph.instagram.com/v21.0'
+// Instagram Graph API now uses Facebook Graph API endpoints
+const IG_API = 'https://graph.facebook.com/v21.0'
 const FB_API = 'https://graph.facebook.com/v21.0'
 const GEMINI_API = 'https://generativelanguage.googleapis.com/v1beta/models'
 
