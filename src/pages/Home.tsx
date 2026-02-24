@@ -77,7 +77,6 @@ const SYNC_FUNCTIONS = [
   'sync-instagram',
   'sync-ads',
   'sync-adsense',
-  'sync-churn',
 ]
 
 const SUPABASE_URL = 'https://jdodenbjohnqvhvldfqu.supabase.co'
@@ -162,21 +161,6 @@ export default function HomePage() {
     },
   })
 
-  // Churn metrics filtered by date range
-  const { data: churnData } = useQuery({
-    queryKey: ['churn-metrics', startDate, endDate],
-    queryFn: async () => {
-      const { data } = await supabase
-        .from('churn_metrics')
-        .select('*')
-        .gte('date', startDate)
-        .lte('date', endDate)
-        .order('date', { ascending: false })
-        .limit(1)
-        .single()
-      return data
-    },
-  })
 
   // Monthly expenses for all months in range
   const { data: periodExpenses = [] } = useQuery({
@@ -212,8 +196,10 @@ export default function HomePage() {
   const profit = netRevenue - totalExpenses
   const avgDaily = days > 0 ? grossRevenue / days : 0
 
-  // Churn
-  const churnRate = churnData?.churn_percentage || 0
+  // Churn (cancellations + refunds from all sources in the selected period)
+  const churnCount = refundTx.length
+  const totalTxCount = paidTx.length + refundTx.length
+  const churnRate = totalTxCount > 0 ? (churnCount / totalTxCount) * 100 : 0
   const isChurnHigh = churnRate > 5
 
   // Margin (profit / revenue)
@@ -409,7 +395,7 @@ export default function HomePage() {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <KPICard icon={DollarSign} label={t('home.total_revenue')} value={BRL(grossRevenue)} sub={`${days} ${t('home.day')}s`} accent="emerald" trend={avgDaily > 0 ? 'up' : undefined} trendVal={`${BRL(avgDaily)}/${t('home.day')}`} />
         <KPICard icon={TrendingUp} label={t('home.net_revenue')} value={BRL(netRevenue)} sub={t('home.revenue_minus_refunds')} accent={netRevenue > 0 ? 'blue' : 'red'} trend={netRevenue > 0 ? 'up' : 'down'} />
-        <KPICard icon={Users} label={t('home.churn_rate')} value={`${churnRate.toFixed(1)}%`} sub={`${churnData?.total_customers || 0} ${t('home.clients')}`} accent={isChurnHigh ? 'amber' : 'emerald'} />
+        <KPICard icon={Users} label={t('home.churn_rate')} value={`${churnRate.toFixed(1)}%`} sub={`${churnCount} ${t('home.cancellations_refunds')}`} accent={isChurnHigh ? 'amber' : 'emerald'} />
         <KPICard icon={AlertCircle} label={t('home.refunds')} value={BRL(totalRefunds)} sub={grossRevenue > 0 ? `${refundPct.toFixed(1)}% ${t('home.of_revenue')}` : ''} accent={totalRefunds > 0 ? 'red' : 'gray'} warning={refundPct > 10 ? t('home.above_10') : undefined} />
       </div>
 

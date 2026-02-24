@@ -67,6 +67,7 @@
     "revenue_minus_refunds": "Revenue - refunds",
     "churn_rate": "Churn Rate",
     "clients": "clients",
+    "cancellations_refunds": "cancellations/refunds",
     "refunds": "Refunds",
     "of_revenue": "of revenue",
     "above_10": "Above 10%",
