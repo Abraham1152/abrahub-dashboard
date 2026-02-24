@@ -149,12 +149,30 @@ export default function HomePage() {
     setTimeout(() => setSyncStatus('idle'), 3000)
   }
 
-  // Auto-sync on mount + every 5 minutes
+  // Auto-sync on mount + every 10 minutes (realtime handles instant updates)
   useEffect(() => {
     syncAll()
-    const interval = setInterval(syncAll, 5 * 60 * 1000)
+    const interval = setInterval(syncAll, 10 * 60 * 1000)
     return () => clearInterval(interval)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Supabase Realtime: auto-refresh when revenue_transactions or financial_daily change
+  useEffect(() => {
+    const channel = supabase
+      .channel('home-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'revenue_transactions' }, () => {
+        queryClient.invalidateQueries({ queryKey: ['home-revenue-tx'] })
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'financial_daily' }, () => {
+        queryClient.invalidateQueries({ queryKey: ['home-financial-daily'] })
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'ads_campaigns' }, () => {
+        queryClient.invalidateQueries({ queryKey: ['ads-campaigns'] })
+      })
+      .subscribe()
+
+    return () => { supabase.removeChannel(channel) }
+  }, [queryClient])
 
   // Revenue transactions for selected period
   const { data: periodTransactions = [] } = useQuery({
