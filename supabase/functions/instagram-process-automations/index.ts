@@ -199,6 +199,19 @@ serve(async (req) => {
             error_message: errorMessage || null,
           })
 
+          // Upsert lead for this commenter
+          try {
+            await supabase.rpc('upsert_lead', {
+              p_username: username,
+              p_ig_user_id: null,
+              p_source: 'automation_comment',
+              p_source_automation_id: automation.id,
+            })
+          } catch (e) {
+            // Non-critical, don't fail the automation
+            console.error('Lead upsert error:', e instanceof Error ? e.message : e)
+          }
+
           processedSet.add(commentId)
           totalProcessed++
 

@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { supabase } from '@/integrations/supabase'
 import { useState } from 'react'
 import { Plus, Trash2 } from 'lucide-react'
+import { useTranslation } from '@/i18n/useTranslation'
 
 type OKR = {
   id: string
@@ -14,6 +15,7 @@ type OKR = {
 
 export default function OKRsPage() {
   const queryClient = useQueryClient()
+  const { t, lang } = useTranslation()
   const [selectedQuarter, setSelectedQuarter] = useState('Q1-2025')
   const [showForm, setShowForm] = useState(false)
   const [formData, setFormData] = useState({
@@ -62,20 +64,21 @@ export default function OKRsPage() {
 
   const categories = ['revenue', 'growth', 'product', 'operations'] as const
   const categoryConfig = {
-    revenue: { label: 'Receita', color: 'emerald', icon: 'bg-emerald-50 dark:bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' },
-    growth: { label: 'Crescimento', color: 'blue', icon: 'bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400' },
-    product: { label: 'Produto', color: 'violet', icon: 'bg-violet-50 dark:bg-violet-500/10 text-violet-600 dark:text-violet-400' },
-    operations: { label: 'Operacoes', color: 'amber', icon: 'bg-amber-50 dark:bg-amber-500/10 text-amber-600 dark:text-amber-400' },
+    revenue: { label: t('okrs.revenue'), color: 'emerald', icon: 'bg-emerald-50 dark:bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' },
+    growth: { label: t('okrs.growth'), color: 'blue', icon: 'bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400' },
+    product: { label: t('okrs.product'), color: 'violet', icon: 'bg-violet-50 dark:bg-violet-500/10 text-violet-600 dark:text-violet-400' },
+    operations: { label: t('okrs.operations'), color: 'amber', icon: 'bg-amber-50 dark:bg-amber-500/10 text-amber-600 dark:text-amber-400' },
   }
   const barColors: Record<string, string> = { emerald: 'bg-emerald-500', blue: 'bg-blue-500', violet: 'bg-violet-500', amber: 'bg-amber-500' }
 
   const quarters = ['Q1-2025', 'Q2-2025', 'Q3-2025', 'Q4-2025']
+  const locale = lang === 'pt' ? 'pt-BR' : 'en-US'
 
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Metas Trimestrais (OKRs)</h1>
-        <p className="text-sm text-gray-500 dark:text-neutral-500 mt-1">Objetivos e Key Results por trimestre</p>
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">{t('okrs.title')}</h1>
+        <p className="text-sm text-gray-500 dark:text-neutral-500 mt-1">{t('okrs.subtitle')}</p>
       </div>
 
       <div className="flex gap-3 items-center">
@@ -98,7 +101,7 @@ export default function OKRsPage() {
           onClick={() => setShowForm(!showForm)}
           className="ml-auto bg-blue-600 text-white px-4 py-2 rounded-xl font-semibold hover:bg-blue-700 transition-colors flex items-center gap-2 text-sm"
         >
-          <Plus size={16} /> Adicionar Meta
+          <Plus size={16} /> {t('okrs.add')}
         </button>
       </div>
 
@@ -112,7 +115,7 @@ export default function OKRsPage() {
             className="space-y-4"
           >
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-neutral-300 mb-2">Categoria</label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-neutral-300 mb-2">{t('okrs.category')}</label>
               <select value={formData.category} onChange={(e) => setFormData({ ...formData, category: e.target.value as any })} className="w-full">
                 {categories.map((c) => (
                   <option key={c} value={c}>{categoryConfig[c].label}</option>
@@ -120,16 +123,16 @@ export default function OKRsPage() {
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-neutral-300 mb-2">Meta</label>
-              <input type="text" value={formData.title} onChange={(e) => setFormData({ ...formData, title: e.target.value })} placeholder="Ex: Aumentar MRR em 50%" className="w-full" required />
+              <label className="block text-sm font-medium text-gray-700 dark:text-neutral-300 mb-2">{t('okrs.goal')}</label>
+              <input type="text" value={formData.title} onChange={(e) => setFormData({ ...formData, title: e.target.value })} placeholder={t('okrs.goal_placeholder')} className="w-full" required />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-neutral-300 mb-2">Valor Alvo</label>
-              <input type="number" value={formData.targetValue} onChange={(e) => setFormData({ ...formData, targetValue: e.target.value })} placeholder="Ex: 50000" className="w-full" required />
+              <label className="block text-sm font-medium text-gray-700 dark:text-neutral-300 mb-2">{t('okrs.target_value')}</label>
+              <input type="number" value={formData.targetValue} onChange={(e) => setFormData({ ...formData, targetValue: e.target.value })} placeholder={t('okrs.target_placeholder')} className="w-full" required />
             </div>
             <div className="flex gap-2">
-              <button type="submit" className="bg-blue-600 text-white px-4 py-2 rounded-xl font-semibold hover:bg-blue-700 text-sm">Adicionar</button>
-              <button type="button" onClick={() => setShowForm(false)} className="bg-gray-100 dark:bg-neutral-800 text-gray-700 dark:text-neutral-200 px-4 py-2 rounded-xl hover:bg-gray-200 dark:hover:bg-neutral-700 text-sm">Cancelar</button>
+              <button type="submit" className="bg-blue-600 text-white px-4 py-2 rounded-xl font-semibold hover:bg-blue-700 text-sm">{t('okrs.submit')}</button>
+              <button type="button" onClick={() => setShowForm(false)} className="bg-gray-100 dark:bg-neutral-800 text-gray-700 dark:text-neutral-200 px-4 py-2 rounded-xl hover:bg-gray-200 dark:hover:bg-neutral-700 text-sm">{t('okrs.cancel')}</button>
             </div>
           </form>
         </div>
@@ -143,11 +146,11 @@ export default function OKRsPage() {
             <div key={category}>
               <div className="flex items-center gap-2 mb-3">
                 <span className={`px-3 py-1 rounded-lg text-xs font-semibold ${cfg.icon}`}>{cfg.label}</span>
-                <span className="text-xs text-gray-400 dark:text-neutral-500">{categoryOKRs.length} metas</span>
+                <span className="text-xs text-gray-400 dark:text-neutral-500">{categoryOKRs.length} {t('okrs.goals')}</span>
               </div>
               <div className="space-y-2">
                 {categoryOKRs.length === 0 ? (
-                  <p className="text-gray-400 dark:text-neutral-600 text-sm pl-1">Nenhuma meta</p>
+                  <p className="text-gray-400 dark:text-neutral-600 text-sm pl-1">{t('okrs.no_goals')}</p>
                 ) : (
                   categoryOKRs.map((okr) => {
                     const progress = okr.target_value > 0 ? (okr.current_value / okr.target_value) * 100 : 0
@@ -157,7 +160,7 @@ export default function OKRsPage() {
                           <div className="flex-1">
                             <h3 className="font-medium text-gray-900 dark:text-white text-sm">{okr.title}</h3>
                             <p className="text-xs text-gray-500 dark:text-neutral-400 mt-1">
-                              {okr.current_value.toLocaleString('pt-BR')} / {okr.target_value.toLocaleString('pt-BR')}
+                              {okr.current_value.toLocaleString(locale)} / {okr.target_value.toLocaleString(locale)}
                             </p>
                           </div>
                           <button
@@ -174,7 +177,7 @@ export default function OKRsPage() {
                           />
                         </div>
                         <p className="text-[11px] text-gray-400 dark:text-neutral-500 mt-1.5">
-                          {Math.round(progress)}% concluido
+                          {Math.round(progress)}% {t('okrs.completed')}
                         </p>
                       </div>
                     )

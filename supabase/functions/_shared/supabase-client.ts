@@ -8,7 +8,7 @@ export function getServiceClient() {
 }
 
 export async function logSync(
-  service: 'stripe' | 'kiwify' | 'youtube' | 'instagram' | 'churn' | 'ads',
+  service: 'stripe' | 'kiwify' | 'youtube' | 'instagram' | 'churn' | 'ads' | 'adsense' | 'ads-optimizer',
   status: 'running' | 'success' | 'error',
   recordsProcessed = 0,
   errorMessage?: string

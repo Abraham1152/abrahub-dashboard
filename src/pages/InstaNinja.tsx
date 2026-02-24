@@ -1,10 +1,10 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { supabase } from '@/integrations/supabase'
 import { useTheme } from '@/stores/themeStore'
+import { useTranslation } from '@/i18n/useTranslation'
 import { useState } from 'react'
 import {
   Instagram,
-  Zap,
   MessageCircle,
   Heart,
   Eye,
@@ -16,6 +16,7 @@ import {
   RefreshCw,
   Settings,
   Pause,
+  Zap,
   AlertCircle,
   CheckCircle2,
   Clock,
@@ -98,11 +99,11 @@ const inputClass = 'w-full px-3 py-2.5 text-sm bg-white dark:bg-neutral-800 bord
 
 export default function InstaNinjaPage() {
   useTheme()
+  const { t } = useTranslation()
   const queryClient = useQueryClient()
   const [activeTab, setActiveTab] = useState<ActiveTab>('posts')
   const [editingPost, setEditingPost] = useState<InstagramPost | null>(null)
   const [syncing, setSyncing] = useState(false)
-  const [processing, setProcessing] = useState(false)
 
   // Fetch posts
   const { data: posts = [], isLoading: postsLoading } = useQuery({
@@ -171,27 +172,6 @@ export default function InstaNinjaPage() {
     setSyncing(false)
   }
 
-  // Process automations now
-  const handleProcessAutomations = async () => {
-    setProcessing(true)
-    try {
-      const res = await fetch(
-        `https://jdodenbjohnqvhvldfqu.supabase.co/functions/v1/instagram-process-automations`,
-        {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-          },
-        }
-      )
-      const result = await res.json()
-      if (result.comments_processed > 0) {
-        queryClient.invalidateQueries({ queryKey: ['instagram-processed-comments'] })
-      }
-    } catch {}
-    setProcessing(false)
-  }
-
   if (postsLoading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -210,37 +190,27 @@ export default function InstaNinjaPage() {
               <Bot size={22} className="text-white" />
             </div>
             <div>
-              <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Insta Ninja</h1>
-              <p className="text-gray-500 dark:text-neutral-500 text-sm">Automações de comentários e DM</p>
+              <h1 className="text-3xl font-bold text-gray-900 dark:text-white">{t('instaninja.title')}</h1>
+              <p className="text-gray-500 dark:text-neutral-500 text-sm">{t('instaninja.subtitle')}</p>
             </div>
           </div>
         </div>
-        <div className="flex gap-2">
-          <button
-            onClick={handleProcessAutomations}
-            disabled={processing}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium bg-gradient-to-r from-purple-600 to-pink-600 text-white hover:from-purple-700 hover:to-pink-700 shadow-lg shadow-purple-600/20 transition-all disabled:opacity-50"
-          >
-            {processing ? <RefreshCw size={16} className="animate-spin" /> : <Zap size={16} />}
-            Executar Agora
-          </button>
-          <button
-            onClick={handleSync}
-            disabled={syncing}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium bg-white dark:bg-neutral-900 border border-gray-200 dark:border-neutral-800 text-gray-700 dark:text-neutral-300 hover:bg-gray-50 dark:hover:bg-neutral-800 transition-all disabled:opacity-50"
-          >
-            <RefreshCw size={16} className={syncing ? 'animate-spin' : ''} />
-            Sincronizar Posts
-          </button>
-        </div>
+        <button
+          onClick={handleSync}
+          disabled={syncing}
+          className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium bg-white dark:bg-neutral-900 border border-gray-200 dark:border-neutral-800 text-gray-700 dark:text-neutral-300 hover:bg-gray-50 dark:hover:bg-neutral-800 transition-all disabled:opacity-50"
+        >
+          <RefreshCw size={16} className={syncing ? 'animate-spin' : ''} />
+          {t('instaninja.sync_posts')}
+        </button>
       </div>
 
       {/* Stats */}
       <div className="grid grid-cols-4 gap-4">
-        <StatCard icon={Bot} label="Automações Ativas" value={activeAutomations.toString()} color="purple" />
-        <StatCard icon={Send} label="DMs Enviadas Hoje" value={todayDMs.toString()} color="pink" />
-        <StatCard icon={Reply} label="Respostas Hoje" value={todayReplies.toString()} color="blue" />
-        <StatCard icon={MessageCircle} label="Total Processados" value={fmt(processedComments.length)} color="green" />
+        <StatCard icon={Bot} label={t('instaninja.active_automations')} value={activeAutomations.toString()} color="purple" />
+        <StatCard icon={Send} label={t('instaninja.dms_today')} value={todayDMs.toString()} color="pink" />
+        <StatCard icon={Reply} label={t('instaninja.replies_today')} value={todayReplies.toString()} color="blue" />
+        <StatCard icon={MessageCircle} label={t('instaninja.total_processed')} value={fmt(processedComments.length)} color="green" />
       </div>
 
       {/* Tabs */}
@@ -253,7 +223,7 @@ export default function InstaNinjaPage() {
               : 'bg-white dark:bg-neutral-900 border border-gray-200 dark:border-neutral-800 text-gray-500 dark:text-neutral-400 hover:text-gray-900 dark:hover:text-white hover:border-gray-300 dark:hover:border-neutral-700'
           }`}
         >
-          <Instagram size={18} /> Posts ({posts.length})
+          <Instagram size={18} /> {t('instaninja.posts')} ({posts.length})
         </button>
         <button
           onClick={() => setActiveTab('log')}
@@ -263,7 +233,7 @@ export default function InstaNinjaPage() {
               : 'bg-white dark:bg-neutral-900 border border-gray-200 dark:border-neutral-800 text-gray-500 dark:text-neutral-400 hover:text-gray-900 dark:hover:text-white hover:border-gray-300 dark:hover:border-neutral-700'
           }`}
         >
-          <Clock size={18} /> Log de Atividade ({processedComments.length})
+          <Clock size={18} /> {t('instaninja.activity_log')} ({processedComments.length})
         </button>
       </div>
 
@@ -329,12 +299,14 @@ function PostsGrid({ posts, automationMap, onConfigure }: {
   automationMap: Map<string, Automation>
   onConfigure: (post: InstagramPost) => void
 }) {
+  const { t } = useTranslation()
+
   if (posts.length === 0) {
     return (
       <div className="text-center py-16">
         <Instagram size={48} className="mx-auto text-gray-300 dark:text-neutral-700 mb-3" />
-        <p className="text-gray-500 dark:text-neutral-500 text-sm">Nenhum post sincronizado.</p>
-        <p className="text-gray-400 dark:text-neutral-600 text-xs mt-1">Clique em "Sincronizar Posts" acima.</p>
+        <p className="text-gray-500 dark:text-neutral-500 text-sm">{t('instaninja.no_posts')}</p>
+        <p className="text-gray-400 dark:text-neutral-600 text-xs mt-1">{t('instaninja.click_sync')}</p>
       </div>
     )
   }
@@ -373,11 +345,11 @@ function PostsGrid({ posts, automationMap, onConfigure }: {
               <div className="absolute top-2 right-2">
                 {isActive ? (
                   <span className="flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold bg-green-500 text-white shadow-lg">
-                    <Zap size={10} /> ATIVA
+                    <Zap size={10} /> {t('instaninja.active')}
                   </span>
                 ) : hasAutomation ? (
                   <span className="flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold bg-yellow-500 text-white shadow-lg">
-                    <Pause size={10} /> PAUSADA
+                    <Pause size={10} /> {t('instaninja.paused')}
                   </span>
                 ) : null}
               </div>
@@ -386,14 +358,14 @@ function PostsGrid({ posts, automationMap, onConfigure }: {
               <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                 <button className="px-4 py-2 rounded-xl bg-white/20 backdrop-blur-sm text-white text-sm font-semibold border border-white/30">
                   <Settings size={16} className="inline mr-1.5" />
-                  {hasAutomation ? 'Ajustar' : 'Configurar'}
+                  {hasAutomation ? t('instaninja.adjust') : t('instaninja.configure')}
                 </button>
               </div>
 
               {/* Media type badge */}
               <div className="absolute bottom-2 left-2">
                 <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-black/60 text-white">
-                  {post.media_type === 'VIDEO' ? 'VIDEO' : post.media_type === 'CAROUSEL_ALBUM' ? 'CAROUSEL' : post.media_type === 'REEL' ? 'REEL' : 'FOTO'}
+                  {post.media_type === 'VIDEO' ? t('instaninja.video') : post.media_type === 'CAROUSEL_ALBUM' ? t('instaninja.carousel') : post.media_type === 'REEL' ? t('instaninja.reel') : t('instaninja.photo')}
                 </span>
               </div>
             </div>
@@ -456,6 +428,7 @@ function AutomationModal({ post, existingAutomation, onClose }: {
   existingAutomation: Automation | null
   onClose: () => void
 }) {
+  const { t } = useTranslation()
   const [isActive, setIsActive] = useState(existingAutomation?.is_active ?? true)
   const [respondToAll, setRespondToAll] = useState(existingAutomation?.respond_to_all ?? false)
   const [keywords, setKeywords] = useState<string[]>(existingAutomation?.keywords || [])
@@ -555,9 +528,9 @@ function AutomationModal({ post, existingAutomation, onClose }: {
                 )}
               </div>
               <div>
-                <h3 className="text-lg font-bold text-gray-900 dark:text-white">Configurar Automacao</h3>
+                <h3 className="text-lg font-bold text-gray-900 dark:text-white">{t('instaninja.config_title')}</h3>
                 <p className="text-xs text-gray-500 dark:text-neutral-500 line-clamp-1">
-                  {post.caption?.substring(0, 60) || 'Sem legenda'}
+                  {post.caption?.substring(0, 60) || t('instaninja.no_caption')}
                 </p>
               </div>
             </div>
@@ -571,8 +544,8 @@ function AutomationModal({ post, existingAutomation, onClose }: {
           {/* Active Toggle */}
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-semibold text-gray-900 dark:text-white">Automacao Ativa</p>
-              <p className="text-xs text-gray-500 dark:text-neutral-500">Ativa ou desativa esta automacao</p>
+              <p className="text-sm font-semibold text-gray-900 dark:text-white">{t('instaninja.automation_active')}</p>
+              <p className="text-xs text-gray-500 dark:text-neutral-500">{t('instaninja.toggle_desc')}</p>
             </div>
             <button
               onClick={() => setIsActive(!isActive)}
@@ -585,8 +558,8 @@ function AutomationModal({ post, existingAutomation, onClose }: {
           {/* Respond to All Toggle */}
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-semibold text-gray-900 dark:text-white">Responder qualquer comentario?</p>
-              <p className="text-xs text-gray-500 dark:text-neutral-500">Ignora keywords e responde todos</p>
+              <p className="text-sm font-semibold text-gray-900 dark:text-white">{t('instaninja.respond_all')}</p>
+              <p className="text-xs text-gray-500 dark:text-neutral-500">{t('instaninja.respond_all_desc')}</p>
             </div>
             <button
               onClick={() => setRespondToAll(!respondToAll)}
@@ -600,10 +573,10 @@ function AutomationModal({ post, existingAutomation, onClose }: {
           {!respondToAll && (
             <div>
               <label className="text-sm font-semibold text-gray-900 dark:text-white block mb-2">
-                Palavras-chave de ativacao
+                {t('instaninja.keywords')}
               </label>
               <p className="text-xs text-gray-500 dark:text-neutral-500 mb-3">
-                A automacao ativa quando qualquer uma dessas palavras for encontrada no comentario.
+                {t('instaninja.keywords_desc')}
               </p>
               <div className="flex flex-wrap gap-2 mb-3">
                 {keywords.map((kw, i) => (
@@ -624,7 +597,7 @@ function AutomationModal({ post, existingAutomation, onClose }: {
                   value={newKeyword}
                   onChange={e => setNewKeyword(e.target.value)}
                   onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), addKeyword())}
-                  placeholder="Digite uma palavra-chave..."
+                  placeholder={t('instaninja.keyword_placeholder')}
                   className={inputClass}
                   maxLength={128}
                 />
@@ -641,10 +614,10 @@ function AutomationModal({ post, existingAutomation, onClose }: {
           {/* Reply Comments */}
           <div>
             <label className="text-sm font-semibold text-gray-900 dark:text-white block mb-2">
-              Respostas do comentario
+              {t('instaninja.comment_replies')}
             </label>
             <p className="text-xs text-gray-500 dark:text-neutral-500 mb-3">
-              Resposta publica no comentario. Se houver varias, uma sera escolhida aleatoriamente.
+              {t('instaninja.comment_replies_desc')}
             </p>
             <div className="space-y-2 mb-3">
               {replyComments.map((reply, i) => (
@@ -665,7 +638,7 @@ function AutomationModal({ post, existingAutomation, onClose }: {
                 value={newReply}
                 onChange={e => setNewReply(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), addReply())}
-                placeholder="Ex: Ja te enviei no direct!"
+                placeholder={t('instaninja.reply_placeholder')}
                 className={inputClass}
                 maxLength={256}
               />
@@ -682,15 +655,15 @@ function AutomationModal({ post, existingAutomation, onClose }: {
           <div>
             <label className="text-sm font-semibold text-gray-900 dark:text-white block mb-2">
               <Send size={14} className="inline text-pink-500 mr-1.5" />
-              Mensagem da DM
+              {t('instaninja.dm_message')}
             </label>
             <p className="text-xs text-gray-500 dark:text-neutral-500 mb-3">
-              Mensagem privada enviada automaticamente para quem comentar. (Opcional)
+              {t('instaninja.dm_desc')}
             </p>
             <textarea
               value={dmMessage}
               onChange={e => setDmMessage(e.target.value)}
-              placeholder="Ex: Oi! Aqui esta o link que voce pediu..."
+              placeholder={t('instaninja.dm_placeholder')}
               className={`${inputClass} resize-none`}
               rows={3}
               maxLength={400}
@@ -704,11 +677,11 @@ function AutomationModal({ post, existingAutomation, onClose }: {
           <div>
             <label className="text-sm font-semibold text-gray-900 dark:text-white block mb-2">
               <Link2 size={14} className="inline text-pink-500 mr-1.5" />
-              Botoes da DM
-              <span className="text-xs font-normal text-gray-400 dark:text-neutral-500 ml-2">Maximo 3 botoes</span>
+              {t('instaninja.dm_buttons')}
+              <span className="text-xs font-normal text-gray-400 dark:text-neutral-500 ml-2">{t('instaninja.max_buttons')}</span>
             </label>
             <p className="text-xs text-gray-500 dark:text-neutral-500 mb-3">
-              Adicione botoes com links para enviar junto com a mensagem. (Opcional)
+              {t('instaninja.buttons_desc')}
             </p>
 
             {/* Existing buttons */}
@@ -779,7 +752,7 @@ function AutomationModal({ post, existingAutomation, onClose }: {
             <div>
               <label className="text-sm font-semibold text-gray-900 dark:text-white block mb-3">
                 <Eye size={14} className="inline text-purple-500 mr-1.5" />
-                Visualizacao
+                {t('instaninja.preview')}
               </label>
               <div className="max-w-xs mx-auto">
                 <div className="bg-gray-100 dark:bg-neutral-800 rounded-2xl p-4 space-y-3">
@@ -805,7 +778,7 @@ function AutomationModal({ post, existingAutomation, onClose }: {
                     </div>
                   )}
                 </div>
-                <p className="text-[10px] text-center text-gray-400 dark:text-neutral-600 mt-2">Preview da mensagem no Direct</p>
+                <p className="text-[10px] text-center text-gray-400 dark:text-neutral-600 mt-2">{t('instaninja.preview_desc')}</p>
               </div>
             </div>
           )}
@@ -815,10 +788,10 @@ function AutomationModal({ post, existingAutomation, onClose }: {
             <div>
               <label className="text-sm font-semibold text-gray-900 dark:text-white block mb-2">
                 <Link2 size={14} className="inline text-pink-500 mr-1.5" />
-                Link simples (alternativa aos botoes)
+                {t('instaninja.simple_link')}
               </label>
               <p className="text-xs text-gray-500 dark:text-neutral-500 mb-3">
-                Se preferir, coloque so um link direto sem botao. (Opcional)
+                {t('instaninja.simple_link_desc')}
               </p>
               <input
                 type="url"
@@ -840,7 +813,7 @@ function AutomationModal({ post, existingAutomation, onClose }: {
                 className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium text-red-600 hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors disabled:opacity-50"
               >
                 <Trash2 size={16} />
-                {deleting ? 'Excluindo...' : 'Excluir Automacao'}
+                {deleting ? t('instaninja.deleting') : t('instaninja.delete_automation')}
               </button>
             ) : (
               <div />
@@ -850,7 +823,7 @@ function AutomationModal({ post, existingAutomation, onClose }: {
                 onClick={onClose}
                 className="px-5 py-2.5 rounded-xl text-sm font-medium text-gray-700 dark:text-neutral-300 bg-gray-100 dark:bg-neutral-800 hover:bg-gray-200 dark:hover:bg-neutral-700 transition-colors"
               >
-                Cancelar
+                {t('common.cancel')}
               </button>
               <button
                 onClick={handleSave}
@@ -858,7 +831,7 @@ function AutomationModal({ post, existingAutomation, onClose }: {
                 className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-medium bg-gradient-to-r from-purple-600 to-pink-600 text-white hover:from-purple-700 hover:to-pink-700 shadow-lg shadow-purple-600/20 transition-all disabled:opacity-50"
               >
                 {saving ? <RefreshCw size={16} className="animate-spin" /> : <Check size={16} />}
-                {saving ? 'Salvando...' : 'Salvar'}
+                {saving ? t('instaninja.saving') : t('instaninja.save')}
               </button>
             </div>
           </div>
@@ -871,13 +844,14 @@ function AutomationModal({ post, existingAutomation, onClose }: {
 // ==================== ACTIVITY LOG ====================
 
 function ActivityLog({ logs }: { logs: ProcessedComment[] }) {
+  const { t } = useTranslation()
 
   if (logs.length === 0) {
     return (
       <div className="text-center py-16">
         <Clock size={48} className="mx-auto text-gray-300 dark:text-neutral-700 mb-3" />
-        <p className="text-gray-500 dark:text-neutral-500 text-sm">Nenhuma automacao executada ainda.</p>
-        <p className="text-gray-400 dark:text-neutral-600 text-xs mt-1">Configure automacoes nos posts e clique "Executar Agora".</p>
+        <p className="text-gray-500 dark:text-neutral-500 text-sm">{t('instaninja.no_activity')}</p>
+        <p className="text-gray-400 dark:text-neutral-600 text-xs mt-1">{t('instaninja.activity_hint')}</p>
       </div>
     )
   }
@@ -888,11 +862,11 @@ function ActivityLog({ logs }: { logs: ProcessedComment[] }) {
         <table className="w-full">
           <thead>
             <tr className="border-b border-gray-100 dark:border-neutral-800">
-              <th className="text-left text-xs font-semibold text-gray-500 dark:text-neutral-500 px-4 py-3">Quando</th>
-              <th className="text-left text-xs font-semibold text-gray-500 dark:text-neutral-500 px-4 py-3">Usuario</th>
-              <th className="text-left text-xs font-semibold text-gray-500 dark:text-neutral-500 px-4 py-3">Comentario</th>
-              <th className="text-left text-xs font-semibold text-gray-500 dark:text-neutral-500 px-4 py-3">Acao</th>
-              <th className="text-left text-xs font-semibold text-gray-500 dark:text-neutral-500 px-4 py-3">Status</th>
+              <th className="text-left text-xs font-semibold text-gray-500 dark:text-neutral-500 px-4 py-3">{t('instaninja.when')}</th>
+              <th className="text-left text-xs font-semibold text-gray-500 dark:text-neutral-500 px-4 py-3">{t('instaninja.user')}</th>
+              <th className="text-left text-xs font-semibold text-gray-500 dark:text-neutral-500 px-4 py-3">{t('instaninja.comment')}</th>
+              <th className="text-left text-xs font-semibold text-gray-500 dark:text-neutral-500 px-4 py-3">{t('instaninja.action')}</th>
+              <th className="text-left text-xs font-semibold text-gray-500 dark:text-neutral-500 px-4 py-3">{t('instaninja.status')}</th>
             </tr>
           </thead>
           <tbody>
@@ -913,17 +887,17 @@ function ActivityLog({ logs }: { logs: ProcessedComment[] }) {
                   <div className="flex gap-1">
                     {log.action_taken.includes('reply') && (
                       <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-100 dark:bg-blue-500/20 text-blue-700 dark:text-blue-300">
-                        REPLY
+                        {t('instaninja.reply')}
                       </span>
                     )}
                     {log.action_taken.includes('dm') && (
                       <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-pink-100 dark:bg-pink-500/20 text-pink-700 dark:text-pink-300">
-                        DM
+                        {t('instaninja.dm')}
                       </span>
                     )}
                     {log.action_taken === 'none' && (
                       <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-gray-100 dark:bg-neutral-700 text-gray-500 dark:text-neutral-400">
-                        NONE
+                        {t('instaninja.none')}
                       </span>
                     )}
                   </div>
@@ -931,15 +905,15 @@ function ActivityLog({ logs }: { logs: ProcessedComment[] }) {
                 <td className="px-4 py-3">
                   {log.status === 'success' ? (
                     <span className="flex items-center gap-1 text-green-600 dark:text-green-400 text-xs font-medium">
-                      <CheckCircle2 size={14} /> OK
+                      <CheckCircle2 size={14} /> {t('instaninja.ok')}
                     </span>
                   ) : log.status === 'partial' ? (
                     <span className="flex items-center gap-1 text-yellow-600 dark:text-yellow-400 text-xs font-medium">
-                      <AlertCircle size={14} /> Parcial
+                      <AlertCircle size={14} /> {t('instaninja.partial')}
                     </span>
                   ) : (
                     <span className="flex items-center gap-1 text-red-600 dark:text-red-400 text-xs font-medium" title={log.error_message || ''}>
-                      <AlertCircle size={14} /> Erro
+                      <AlertCircle size={14} /> {t('instaninja.error')}
                     </span>
                   )}
                 </td>

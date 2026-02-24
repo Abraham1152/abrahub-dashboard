@@ -88,20 +88,17 @@ serve(async (req) => {
         const planName = sale.product?.plan_name || ''
 
         // Determine transaction type from product plan
-        let txType = 'one_time'
+        // Kiwify = tudo anual por padrao
+        let txType = 'annual'
         if (planName) {
           const planLower = planName.toLowerCase()
-          if (planLower.includes('anual') || planLower.includes('annual') || planLower.includes('year')) {
-            txType = 'annual'
-          } else if (planLower.includes('mensal') || planLower.includes('monthly') || planLower.includes('parcela') || planLower.includes('semestral')) {
-            txType = 'recurring'
-          } else {
+          if (planLower.includes('mensal') || planLower.includes('monthly')) {
             txType = 'recurring'
           }
         }
 
         const isRefund = sale.status === 'refunded' || sale.status === 'chargedback'
-        const isPaid = sale.status === 'paid' || sale.status === 'approved'
+        const isPaid = sale.status === 'paid' || sale.status === 'approved' || sale.status === 'completed'
 
         if (isRefund) {
           dailyRefunds[date] = (dailyRefunds[date] || 0) + amount
@@ -126,6 +123,10 @@ serve(async (req) => {
             payment_method: sale.payment_method || null,
             reference: sale.reference || null,
             net_amount_cents: netAmountCents,
+            ref: sale.tracking?.ref || sale.metadata?.ref || null,
+            src: sale.tracking?.src || null,
+            utm_source: sale.tracking?.utm_source || sale.utm_source || null,
+            utm_content: sale.tracking?.utm_content || null,
           },
         })
       }

@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { HashRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { useEffect } from 'react'
 import { useAuth } from '@/stores/authStore'
 import AuthPage from '@/pages/Auth'
@@ -6,7 +6,6 @@ import DashboardLayout from '@/components/layout/DashboardLayout'
 import HomePage from '@/pages/Home'
 import KanbanPage from '@/pages/Kanban'
 import DecisionsPage from '@/pages/Decisions'
-import OKRsPage from '@/pages/OKRs'
 import DocumentsPage from '@/pages/Documents'
 import SocialMediaPage from '@/pages/SocialMedia'
 import FinanceiroPage from '@/pages/Financeiro'
@@ -15,6 +14,7 @@ import InstaNinjaPage from '@/pages/InstaNinja'
 import AdsManagerPage from '@/pages/AdsManager'
 import HumanAgentPage from '@/pages/HumanAgent'
 import EmailAgentPage from '@/pages/EmailAgent'
+import LeadsPage from '@/pages/Leads'
 import PrivacyPage from '@/pages/Privacy'
 
 function AuthenticatedApp() {
@@ -24,7 +24,6 @@ function AuthenticatedApp() {
         <Route path="/" element={<HomePage />} />
         <Route path="/kanban" element={<KanbanPage />} />
         <Route path="/decisions" element={<DecisionsPage />} />
-        <Route path="/okrs" element={<OKRsPage />} />
         <Route path="/documents" element={<DocumentsPage />} />
         <Route path="/financeiro" element={<FinanceiroPage />} />
         <Route path="/gastos" element={<ExpensesPage />} />
@@ -33,6 +32,7 @@ function AuthenticatedApp() {
         <Route path="/ads" element={<AdsManagerPage />} />
         <Route path="/human-agent" element={<HumanAgentPage />} />
         <Route path="/email-agent" element={<EmailAgentPage />} />
+        <Route path="/leads" element={<LeadsPage />} />
         <Route path="*" element={<Navigate to="/" />} />
       </Routes>
     </DashboardLayout>
@@ -76,8 +76,8 @@ function AppRoutes() {
 
 export default function App() {
   return (
-    <BrowserRouter basename={import.meta.env.BASE_URL}>
+    <HashRouter>
       <AppRoutes />
-    </BrowserRouter>
+    </HashRouter>
   )
 }

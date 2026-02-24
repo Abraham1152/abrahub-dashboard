@@ -1,20 +1,21 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Mail, RefreshCw, CheckCircle2, Clock, Bot, CreditCard, ChevronDown, ChevronUp } from 'lucide-react'
+import { Mail, CheckCircle2, Clock, Bot, CreditCard, ChevronDown, ChevronUp, Monitor, AlertCircle, History, X } from 'lucide-react'
+import { useTranslation } from '@/i18n/useTranslation'
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://jdodenbjohnqvhvldfqu.supabase.co'
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || ''
 
-const TIPOS: Record<string, { label: string; color: string; bg: string; darkBg: string }> = {
-  REEMBOLSO:    { label: 'Reembolso',       color: '#ef4444', bg: 'bg-red-50',    darkBg: 'dark:bg-red-500/10' },
-  ACESSO_CURSO: { label: 'Acesso ao Curso', color: '#3b82f6', bg: 'bg-blue-50',   darkBg: 'dark:bg-blue-500/10' },
-  PAGAMENTO:    { label: 'Pagamento / PIX', color: '#10b981', bg: 'bg-emerald-50', darkBg: 'dark:bg-emerald-500/10' },
-  RECLAMACAO:   { label: 'Reclamação',      color: '#a855f7', bg: 'bg-purple-50',  darkBg: 'dark:bg-purple-500/10' },
-  DUVIDA:       { label: 'Dúvida',          color: '#6b7280', bg: 'bg-gray-50',    darkBg: 'dark:bg-neutral-800' },
-  OUTRO:        { label: 'Outro',           color: '#6b7280', bg: 'bg-gray-50',    darkBg: 'dark:bg-neutral-800' },
+const TIPOS: Record<string, { key: string; color: string }> = {
+  REEMBOLSO:    { key: 'emailagent.refund',        color: '#ef4444' },
+  ACESSO_CURSO: { key: 'emailagent.course_access',  color: '#3b82f6' },
+  PAGAMENTO:    { key: 'emailagent.payment_pix',    color: '#10b981' },
+  RECLAMACAO:   { key: 'emailagent.complaint',      color: '#a855f7' },
+  DUVIDA:       { key: 'emailagent.question',       color: '#6b7280' },
+  OUTRO:        { key: 'emailagent.other',          color: '#6b7280' },
 }
 
 function getTipo(tipo: string) {
-  return TIPOS[tipo] || { label: tipo, color: '#6b7280', bg: 'bg-gray-50', darkBg: 'dark:bg-neutral-800' }
+  return TIPOS[tipo] || { key: tipo, color: '#6b7280' }
 }
 
 function formatTime(iso: string) {
@@ -35,6 +36,7 @@ interface Task {
   email_sent: string
   precisa_acao: boolean
   status: string
+  history_count?: number
 }
 
 interface Feedback {
@@ -85,27 +87,57 @@ async function apiCall(path: string, method = 'GET', body?: any) {
 
 // ─── Badge Component ────────────────────────────────────────────────
 function TipoBadge({ tipo }: { tipo: string }) {
-  const t = getTipo(tipo)
+  const { t } = useTranslation()
+  const tipoInfo = getTipo(tipo)
   return (
     <span
-      className="text-xs font-semibold px-2.5 py-0.5 rounded-full"
-      style={{ background: t.color + '22', color: t.color }}
+      className="text-xs font-semibold px-2.5 py-0.5 rounded-full whitespace-nowrap"
+      style={{ background: tipoInfo.color + '22', color: tipoInfo.color }}
     >
-      {t.label}
+      {t(tipoInfo.key)}
     </span>
   )
 }
 
-// ─── Pending Task Card ──────────────────────────────────────────────
-function PendingCard({ task, onDone, onRefund }: {
+function StatusBadge({ status }: { status: string }) {
+  const { t } = useTranslation()
+  if (status === 'pending') {
+    return (
+      <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-400 whitespace-nowrap flex items-center gap-1">
+        <Clock size={12} />
+        {t('emailagent.pending_status')}
+      </span>
+    )
+  }
+  if (status === 'done') {
+    return (
+      <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-green-100 dark:bg-green-500/20 text-green-700 dark:text-green-400 whitespace-nowrap flex items-center gap-1">
+        <CheckCircle2 size={12} />
+        {t('emailagent.done_status')}
+      </span>
+    )
+  }
+  return (
+    <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-blue-100 dark:bg-blue-500/20 text-blue-700 dark:text-blue-400 whitespace-nowrap flex items-center gap-1">
+      <Bot size={12} />
+      {t('emailagent.auto_status')}
+    </span>
+  )
+}
+
+// ─── Email Card ─────────────────────────────────────────────────────
+function EmailCard({ task, onDone, onRefund, onViewHistory }: {
   task: Task
   onDone: (id: number) => void
   onRefund: (id: number, cobrancaId: string, assinaturaId?: string) => void
+  onViewHistory: (email: string) => void
 }) {
-  const t = getTipo(task.tipo)
+  const { t } = useTranslation()
+  const tipoInfo = getTipo(task.tipo)
   const [expanded, setExpanded] = useState(false)
   const [analysis, setAnalysis] = useState<StripeAnalysis | null>(null)
   const [analyzing, setAnalyzing] = useState(false)
+  const isPending = task.status === 'pending'
 
   const handleAnalyze = async () => {
     setAnalyzing(true)
@@ -117,73 +149,94 @@ function PendingCard({ task, onDone, onRefund }: {
   }
 
   return (
-    <div className="bg-white dark:bg-neutral-900 rounded-xl border border-gray-200 dark:border-neutral-800 overflow-hidden shadow-sm">
-      <div className="p-5" style={{ borderLeft: `4px solid ${t.color}` }}>
-        <div className="flex items-center gap-2 mb-3">
+    <div className={`bg-white dark:bg-neutral-900 rounded-xl border overflow-hidden shadow-sm ${
+      isPending
+        ? 'border-amber-300 dark:border-amber-500/30'
+        : 'border-gray-200 dark:border-neutral-800'
+    }`}>
+      <div className="p-5" style={{ borderLeft: `4px solid ${tipoInfo.color}` }}>
+        {/* Header row */}
+        <div className="flex items-center gap-2 mb-3 flex-wrap">
           <TipoBadge tipo={task.tipo} />
-          <span className="text-xs text-gray-400 dark:text-neutral-500">{formatTime(task.created_at)}</span>
+          <StatusBadge status={task.status} />
+          {(task.history_count ?? 0) > 0 && (
+            <button
+              onClick={() => onViewHistory(task.email_from)}
+              className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-indigo-100 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 flex items-center gap-1 hover:bg-indigo-200 dark:hover:bg-indigo-500/30 transition-colors"
+            >
+              <History size={11} />
+              {task.history_count} {t('emailagent.previous')}
+            </button>
+          )}
+          <span className="text-xs text-gray-400 dark:text-neutral-500 ml-auto">{formatTime(task.created_at)}</span>
         </div>
 
-        <p className="font-semibold text-gray-800 dark:text-white">{task.email_from}</p>
-        <p className="text-gray-500 dark:text-neutral-400 text-sm mb-4">"{task.email_subject}"</p>
+        {/* Sender + Subject */}
+        <p className="font-semibold text-gray-800 dark:text-white text-sm">{task.email_from}</p>
+        <p className="text-gray-500 dark:text-neutral-400 text-sm mb-3">"{task.email_subject}"</p>
 
-        {task.description && (
+        {/* Action needed highlight */}
+        {isPending && task.description && (
           <div className="bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20 rounded-lg p-3 mb-3">
-            <p className="text-xs font-bold text-amber-700 dark:text-amber-400 mb-1">Ação necessária:</p>
+            <p className="text-xs font-bold text-amber-700 dark:text-amber-400 mb-1 flex items-center gap-1">
+              <AlertCircle size={13} />
+              {t('emailagent.action_needed')}
+            </p>
             <p className="text-sm text-amber-900 dark:text-amber-300">{task.description}</p>
           </div>
         )}
 
+        {/* Expand to see response */}
         <button
           onClick={() => setExpanded(!expanded)}
-          className="flex items-center gap-1 text-xs text-gray-400 dark:text-neutral-500 hover:text-gray-600 dark:hover:text-neutral-300 mb-4"
+          className="flex items-center gap-1 text-xs text-gray-400 dark:text-neutral-500 hover:text-gray-600 dark:hover:text-neutral-300"
         >
           {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-          {expanded ? 'Ocultar resposta' : 'Ver resposta enviada ao cliente'}
+          {expanded ? t('emailagent.hide_reply') : t('emailagent.show_reply')}
         </button>
 
         {expanded && (
-          <div className="bg-gray-50 dark:bg-neutral-800 border border-gray-200 dark:border-neutral-700 rounded-lg p-3 text-xs text-gray-600 dark:text-neutral-300 whitespace-pre-wrap leading-relaxed mb-4">
-            {task.email_sent}
+          <div className="mt-3 bg-gray-50 dark:bg-neutral-800 border border-gray-200 dark:border-neutral-700 rounded-lg p-4 text-sm text-gray-600 dark:text-neutral-300 whitespace-pre-wrap leading-relaxed">
+            {task.email_sent || t('emailagent.no_reply')}
           </div>
         )}
 
         {/* Stripe Analysis Area */}
         {task.tipo === 'REEMBOLSO' && analysis && (
-          <div className={`border rounded-lg p-4 text-sm space-y-1 mb-4 ${
+          <div className={`border rounded-lg p-4 text-sm space-y-1 mt-3 ${
             analysis.encontrado && analysis.elegivel
               ? 'border-green-200 dark:border-green-500/20 bg-green-50 dark:bg-green-500/10'
               : 'border-red-200 dark:border-red-500/20 bg-red-50 dark:bg-red-500/10'
           }`}>
             {!analysis.encontrado ? (
-              <p className="text-red-700 dark:text-red-400">⚠️ {analysis.motivo}</p>
+              <p className="text-red-700 dark:text-red-400">{analysis.motivo}</p>
             ) : (
               <>
                 <p className={`font-bold mb-2 ${analysis.elegivel ? 'text-green-800 dark:text-green-400' : 'text-red-800 dark:text-red-400'}`}>
                   {analysis.elegivel
-                    ? `✅ Elegível — compra há ${analysis.dias_passados} dia(s), dentro do prazo`
-                    : `❌ Fora do prazo — compra há ${analysis.dias_passados} dias (máx. ${analysis.prazo_dias} dias)`
+                    ? `${t('emailagent.eligible')} ${analysis.dias_passados} ${t('emailagent.days_within')}`
+                    : `${t('emailagent.expired')} ${analysis.dias_passados} ${t('emailagent.days_max')} ${analysis.prazo_dias} ${t('emailagent.days_close')}`
                   }
                 </p>
-                <p className="text-gray-700 dark:text-neutral-300"><span className="font-medium">Cliente:</span> {analysis.nome}</p>
-                <p className="text-gray-700 dark:text-neutral-300"><span className="font-medium">Produto:</span> {analysis.produto}</p>
-                <p className="text-gray-700 dark:text-neutral-300"><span className="font-medium">Valor:</span> {analysis.moeda} {analysis.valor?.toFixed(2)}</p>
-                <p className="text-gray-700 dark:text-neutral-300"><span className="font-medium">Comprado em:</span> {analysis.data_compra}</p>
-                <p className="text-gray-700 dark:text-neutral-300"><span className="font-medium">Assinatura ativa:</span> {analysis.tem_assinatura ? 'Sim (será cancelada)' : 'Não'}</p>
+                <p className="text-gray-700 dark:text-neutral-300"><span className="font-medium">{t('emailagent.client')}</span> {analysis.nome}</p>
+                <p className="text-gray-700 dark:text-neutral-300"><span className="font-medium">{t('emailagent.product')}</span> {analysis.produto}</p>
+                <p className="text-gray-700 dark:text-neutral-300"><span className="font-medium">{t('emailagent.amount')}</span> {analysis.moeda} {analysis.valor?.toFixed(2)}</p>
+                <p className="text-gray-700 dark:text-neutral-300"><span className="font-medium">{t('emailagent.purchased_at')}</span> {analysis.data_compra}</p>
+                <p className="text-gray-700 dark:text-neutral-300"><span className="font-medium">{t('emailagent.active_sub')}</span> {analysis.tem_assinatura ? t('emailagent.will_cancel') : t('emailagent.no_label')}</p>
                 {analysis.elegivel && (
                   <div className="pt-3 border-t border-green-200 dark:border-green-500/20 mt-3">
                     <p className="text-xs text-green-700 dark:text-green-400 mb-2">
-                      Ao confirmar: reembolso de {analysis.moeda} {analysis.valor?.toFixed(2)} + {analysis.tem_assinatura ? 'cancelamento da assinatura' : 'sem assinatura para cancelar'}.
+                      {t('emailagent.confirm_refund_msg')} {analysis.moeda} {analysis.valor?.toFixed(2)} {t('emailagent.plus')} {analysis.tem_assinatura ? t('emailagent.cancel_sub') : t('emailagent.no_sub_cancel')}.
                     </p>
                     <button
                       onClick={() => {
-                        if (confirm('Tem certeza? Esta ação não pode ser desfeita.')) {
+                        if (confirm(t('emailagent.irreversible'))) {
                           onRefund(task.id, analysis.cobranca_id!, analysis.assinatura_id || undefined)
                         }
                       }}
                       className="bg-red-600 hover:bg-red-700 text-white text-sm px-5 py-2 rounded-lg font-semibold transition-colors w-full"
                     >
-                      ⚠️ Confirmar Reembolso
+                      {t('emailagent.confirm_refund')}
                     </button>
                   </div>
                 )}
@@ -195,25 +248,28 @@ function PendingCard({ task, onDone, onRefund }: {
           </div>
         )}
 
-        <div className="flex items-center justify-between gap-3">
-          {task.tipo === 'REEMBOLSO' ? (
+        {/* Action Buttons for pending */}
+        {isPending && (
+          <div className="flex items-center justify-between gap-3 mt-4 pt-3 border-t border-gray-100 dark:border-neutral-800">
+            {task.tipo === 'REEMBOLSO' ? (
+              <button
+                onClick={handleAnalyze}
+                disabled={analyzing}
+                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-sm px-4 py-2 rounded-lg font-medium transition-colors"
+              >
+                <CreditCard size={16} />
+                {analyzing ? t('emailagent.consulting') : t('emailagent.analyze_stripe')}
+              </button>
+            ) : <div />}
             <button
-              onClick={handleAnalyze}
-              disabled={analyzing}
-              className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-sm px-4 py-2 rounded-lg font-medium transition-colors"
+              onClick={() => onDone(task.id)}
+              className="flex items-center gap-2 border border-gray-300 dark:border-neutral-700 hover:bg-gray-50 dark:hover:bg-neutral-800 text-gray-600 dark:text-neutral-400 text-sm px-4 py-2 rounded-lg font-medium transition-colors"
             >
-              <CreditCard size={16} />
-              {analyzing ? 'Consultando...' : 'Analisar no Stripe'}
+              <CheckCircle2 size={16} />
+              {t('emailagent.mark_done')}
             </button>
-          ) : <div />}
-          <button
-            onClick={() => onDone(task.id)}
-            className="flex items-center gap-2 border border-gray-300 dark:border-neutral-700 hover:bg-gray-50 dark:hover:bg-neutral-800 text-gray-600 dark:text-neutral-400 text-sm px-4 py-2 rounded-lg font-medium transition-colors"
-          >
-            <CheckCircle2 size={16} />
-            Concluído
-          </button>
-        </div>
+          </div>
+        )}
       </div>
     </div>
   )
@@ -221,19 +277,33 @@ function PendingCard({ task, onDone, onRefund }: {
 
 // ─── Main Page ──────────────────────────────────────────────────────
 export default function EmailAgentPage() {
-  const [tab, setTab] = useState<'tarefas' | 'emails' | 'feedbacks'>('tarefas')
+  const { t } = useTranslation()
+  const [tab, setTab] = useState<'emails' | 'feedbacks'>('emails')
   const [tasks, setTasks] = useState<Task[]>([])
   const [feedbacks, setFeedbacks] = useState<Feedback[]>([])
   const [stats, setStats] = useState<Stats>({ total: 0, pending: 0, auto: 0, done: 0 })
-  const [running, setRunning] = useState(false)
-  const [runResult, setRunResult] = useState('')
+  const [period, setPeriod] = useState(0)
+  const [historyEmail, setHistoryEmail] = useState<string | null>(null)
+  const [historyTasks, setHistoryTasks] = useState<Task[]>([])
+  const [loadingHistory, setLoadingHistory] = useState(false)
 
   const loadTasks = useCallback(async () => {
     try {
-      const data = await apiCall('/tasks')
+      const data = await apiCall(`/tasks?days=${period}`)
       if (data.tasks) setTasks(data.tasks)
       if (data.stats) setStats(data.stats)
     } catch { /* ignore */ }
+  }, [period])
+
+  const viewHistory = useCallback(async (email: string) => {
+    const clean = email.includes('<') ? email.split('<')[1].replace('>', '').trim() : email.trim()
+    setHistoryEmail(clean)
+    setLoadingHistory(true)
+    try {
+      const data = await apiCall(`/history/${encodeURIComponent(clean)}`)
+      setHistoryTasks(data.history || [])
+    } catch { /* ignore */ }
+    setLoadingHistory(false)
   }, [])
 
   const loadFeedbacks = useCallback(async () => {
@@ -248,7 +318,7 @@ export default function EmailAgentPage() {
     loadFeedbacks()
     const interval = setInterval(loadTasks, 60000)
     return () => clearInterval(interval)
-  }, [loadTasks, loadFeedbacks])
+  }, [loadTasks, loadFeedbacks, period])
 
   const handleDone = async (id: number) => {
     await apiCall(`/done/${id}`, 'POST')
@@ -263,43 +333,18 @@ export default function EmailAgentPage() {
     loadTasks()
   }
 
-  const handleRun = async () => {
-    setRunning(true)
-    setRunResult('')
-    try {
-      const data = await apiCall('/process', 'POST', {
-        remetente: '',
-        assunto: '',
-        corpo: '',
-      })
-      if (data.sucesso) {
-        setRunResult(`${data.tipo || 'OK'} processado`)
-        loadTasks()
-      } else {
-        setRunResult(data.erro || 'Erro')
-      }
-    } catch {
-      setRunResult('Erro de conexão')
-    } finally {
-      setTimeout(() => { setRunning(false); setRunResult('') }, 3000)
-    }
-  }
-
-  const pending = tasks.filter(t => t.status === 'pending')
-  const auto = tasks.filter(t => t.status === 'auto')
-  const done = tasks.filter(t => t.status === 'done')
+  const pending = tasks.filter(task => task.status === 'pending')
 
   const statCards = [
-    { label: 'e-mails hoje', value: stats.total, icon: Mail, color: 'text-gray-700 dark:text-white' },
-    { label: 'tarefas pendentes', value: stats.pending, icon: Clock, color: 'text-red-500' },
-    { label: 'auto-respondidos', value: stats.auto, icon: Bot, color: 'text-gray-500 dark:text-neutral-400' },
-    { label: 'concluídos', value: stats.done, icon: CheckCircle2, color: 'text-green-500' },
+    { label: t('emailagent.emails_today'), value: stats.total, icon: Mail, color: 'text-gray-700 dark:text-white' },
+    { label: t('emailagent.pending'), value: stats.pending, icon: Clock, color: 'text-amber-500' },
+    { label: t('emailagent.auto_replied'), value: stats.auto, icon: Bot, color: 'text-blue-500' },
+    { label: t('emailagent.completed'), value: stats.done, icon: CheckCircle2, color: 'text-green-500' },
   ]
 
   const tabs = [
-    { key: 'tarefas' as const, label: 'Tarefas', badge: pending.length },
-    { key: 'emails' as const, label: 'E-mails respondidos', badge: 0 },
-    { key: 'feedbacks' as const, label: 'Feedbacks', badge: feedbacks.length },
+    { key: 'emails' as const, label: t('emailagent.processed_tab'), badge: pending.length },
+    { key: 'feedbacks' as const, label: t('emailagent.feedback_tab'), badge: feedbacks.length },
   ]
 
   return (
@@ -309,20 +354,47 @@ export default function EmailAgentPage() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-3">
             <Mail size={28} />
-            Agente de E-mails
+            {t('emailagent.title')}
           </h1>
           <p className="text-sm text-gray-500 dark:text-neutral-400 mt-1">
-            Suporte automatizado com IA para suporte@abrahub.com
+            {t('emailagent.subtitle')}
           </p>
         </div>
-        <button
-          onClick={handleRun}
-          disabled={running}
-          className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white px-5 py-2.5 rounded-xl text-sm font-medium transition-colors"
-        >
-          <RefreshCw size={16} className={running ? 'animate-spin' : ''} />
-          {running ? 'Verificando...' : runResult || 'Verificar E-mails'}
-        </button>
+      </div>
+
+      {/* Agent Status Notice */}
+      <div className="bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/20 rounded-xl p-4 flex items-start gap-3">
+        <Monitor size={20} className="text-blue-600 dark:text-blue-400 mt-0.5 shrink-0" />
+        <div>
+          <p className="text-sm font-medium text-blue-800 dark:text-blue-300">
+            {t('emailagent.local_agent')}
+          </p>
+          <p className="text-xs text-blue-600 dark:text-blue-400 mt-1">
+            {t('emailagent.local_desc')} <span className="font-mono">localhost:8000</span>.
+            {' '}{t('emailagent.realtime_desc')}
+          </p>
+        </div>
+      </div>
+
+      {/* Period Filter */}
+      <div className="flex gap-1 bg-gray-100 dark:bg-neutral-800 p-1 rounded-xl w-fit">
+        {[
+          { value: 0, label: t('emailagent.today') },
+          { value: 7, label: t('emailagent.last_7d') },
+          { value: 30, label: t('emailagent.last_30d') },
+        ].map((p) => (
+          <button
+            key={p.value}
+            onClick={() => setPeriod(p.value)}
+            className={`px-4 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+              period === p.value
+                ? 'bg-white dark:bg-neutral-700 text-gray-800 dark:text-white shadow-sm'
+                : 'text-gray-500 dark:text-neutral-400 hover:text-gray-700 dark:hover:text-neutral-300'
+            }`}
+          >
+            {p.label}
+          </button>
+        ))}
       </div>
 
       {/* Stats */}
@@ -338,25 +410,25 @@ export default function EmailAgentPage() {
 
       {/* Tabs */}
       <div className="flex gap-1 bg-gray-100 dark:bg-neutral-800 p-1 rounded-xl w-fit">
-        {tabs.map((t) => (
+        {tabs.map((tabItem) => (
           <button
-            key={t.key}
+            key={tabItem.key}
             onClick={() => {
-              setTab(t.key)
-              if (t.key === 'feedbacks') loadFeedbacks()
+              setTab(tabItem.key)
+              if (tabItem.key === 'feedbacks') loadFeedbacks()
             }}
             className={`px-5 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${
-              tab === t.key
+              tab === tabItem.key
                 ? 'bg-white dark:bg-neutral-700 text-gray-800 dark:text-white shadow-sm'
                 : 'text-gray-500 dark:text-neutral-400 hover:text-gray-700 dark:hover:text-neutral-300'
             }`}
           >
-            {t.label}
-            {t.badge > 0 && (
+            {tabItem.label}
+            {tabItem.badge > 0 && (
               <span className={`text-xs px-1.5 py-0.5 rounded-full text-white ${
-                t.key === 'feedbacks' ? 'bg-purple-500' : 'bg-red-500'
+                tabItem.key === 'feedbacks' ? 'bg-purple-500' : 'bg-amber-500'
               }`}>
-                {t.badge}
+                {tabItem.badge}
               </span>
             )}
           </button>
@@ -364,60 +436,28 @@ export default function EmailAgentPage() {
       </div>
 
       {/* Tab Content */}
-      {tab === 'tarefas' && (
-        <div className="space-y-6">
-          {/* Pending */}
-          <div className="space-y-3">
-            {pending.length > 0 ? (
-              pending.map((t) => (
-                <PendingCard
-                  key={t.id}
-                  task={t}
-                  onDone={handleDone}
-                  onRefund={handleRefund}
-                />
-              ))
-            ) : (
-              <p className="text-sm text-gray-400 dark:text-neutral-500 py-4 text-center">
-                Nenhuma tarefa pendente ✓
-              </p>
-            )}
-          </div>
-
-          {/* Done */}
-          {done.length > 0 && (
-            <>
-              <div className="flex items-center gap-3">
-                <div className="h-px bg-gray-200 dark:bg-neutral-800 flex-1" />
-                <p className="text-xs font-semibold text-gray-400 dark:text-neutral-500 uppercase tracking-widest">Concluídos</p>
-                <div className="h-px bg-gray-200 dark:bg-neutral-800 flex-1" />
-              </div>
-              <div className="space-y-2">
-                {done.map((t) => (
-                  <div key={t.id} className="bg-white dark:bg-neutral-900 rounded-xl border border-gray-200 dark:border-neutral-800 p-3 flex items-center gap-3 opacity-50">
-                    <TipoBadge tipo={t.tipo} />
-                    <span className="text-xs text-gray-400 dark:text-neutral-500 shrink-0">{formatTime(t.created_at)}</span>
-                    <span className="text-sm text-gray-600 dark:text-neutral-300 truncate">{t.email_from}</span>
-                    <span className="text-sm text-gray-400 dark:text-neutral-500 truncate flex-1">"{t.email_subject}"</span>
-                    <span className="text-xs text-green-600 dark:text-green-400 font-semibold shrink-0">✓ Concluído</span>
-                  </div>
-                ))}
-              </div>
-            </>
-          )}
-        </div>
-      )}
-
       {tab === 'emails' && (
-        <div className="space-y-2">
-          {auto.length > 0 ? (
-            auto.map((t) => (
-              <AutoEmailCard key={t.id} task={t} />
+        <div className="space-y-3">
+          {tasks.length > 0 ? (
+            tasks.map((task) => (
+              <EmailCard
+                key={task.id}
+                task={task}
+                onDone={handleDone}
+                onRefund={handleRefund}
+                onViewHistory={viewHistory}
+              />
             ))
           ) : (
-            <p className="text-sm text-gray-400 dark:text-neutral-500 py-4 text-center">
-              Nenhum e-mail respondido hoje ainda.
-            </p>
+            <div className="text-center py-12">
+              <Mail size={40} className="mx-auto text-gray-300 dark:text-neutral-700 mb-3" />
+              <p className="text-sm text-gray-400 dark:text-neutral-500">
+                {t('emailagent.no_emails')}
+              </p>
+              <p className="text-xs text-gray-300 dark:text-neutral-600 mt-1">
+                {t('emailagent.agent_auto')}
+              </p>
+            </div>
           )}
         </div>
       )}
@@ -429,35 +469,61 @@ export default function EmailAgentPage() {
               <FeedbackCard key={f.id} feedback={f} />
             ))
           ) : (
-            <p className="text-sm text-gray-400 dark:text-neutral-500 py-4 text-center">
-              Nenhum feedback recebido ainda.
-            </p>
+            <div className="text-center py-12">
+              <Mail size={40} className="mx-auto text-gray-300 dark:text-neutral-700 mb-3" />
+              <p className="text-sm text-gray-400 dark:text-neutral-500">
+                {t('emailagent.no_feedbacks')}
+              </p>
+            </div>
           )}
         </div>
       )}
-    </div>
-  )
-}
 
-// ─── Auto Email Card ────────────────────────────────────────────────
-function AutoEmailCard({ task }: { task: Task }) {
-  const [expanded, setExpanded] = useState(false)
+      {/* History Slide-Over */}
+      {historyEmail && (
+        <div className="fixed inset-0 z-50 flex justify-end">
+          <div className="absolute inset-0 bg-black/40" onClick={() => setHistoryEmail(null)} />
+          <div className="relative w-full max-w-lg bg-white dark:bg-neutral-900 border-l border-gray-200 dark:border-neutral-800 shadow-2xl overflow-y-auto">
+            <div className="sticky top-0 bg-white dark:bg-neutral-900 border-b border-gray-200 dark:border-neutral-800 p-5 flex items-center justify-between z-10">
+              <div>
+                <h3 className="font-bold text-gray-900 dark:text-white flex items-center gap-2">
+                  <History size={18} />
+                  {t('emailagent.history_title')}
+                </h3>
+                <p className="text-xs text-gray-500 dark:text-neutral-400 mt-0.5">{historyEmail}</p>
+              </div>
+              <button onClick={() => setHistoryEmail(null)} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-neutral-800 text-gray-400">
+                <X size={18} />
+              </button>
+            </div>
 
-  return (
-    <div className="bg-white dark:bg-neutral-900 rounded-xl border border-gray-200 dark:border-neutral-800 p-3 flex items-center gap-3 shadow-sm">
-      <TipoBadge tipo={task.tipo} />
-      <span className="text-xs text-gray-400 dark:text-neutral-500 shrink-0">{formatTime(task.created_at)}</span>
-      <span className="text-sm text-gray-700 dark:text-neutral-300 font-medium truncate">{task.email_from}</span>
-      <span className="text-sm text-gray-400 dark:text-neutral-500 truncate flex-1">"{task.email_subject}"</span>
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="text-xs text-blue-500 hover:text-blue-700 dark:hover:text-blue-300 shrink-0"
-      >
-        {expanded ? 'ocultar ▴' : 'ver resposta ▾'}
-      </button>
-      {expanded && (
-        <div className="absolute right-4 mt-1 w-80 bg-white dark:bg-neutral-800 border border-gray-200 dark:border-neutral-700 rounded-lg shadow-xl p-3 text-xs text-gray-600 dark:text-neutral-300 whitespace-pre-wrap z-30">
-          {task.email_sent}
+            <div className="p-5 space-y-4">
+              {loadingHistory ? (
+                <p className="text-sm text-gray-400 dark:text-neutral-500 text-center py-8">{t('emailagent.loading')}...</p>
+              ) : historyTasks.length === 0 ? (
+                <p className="text-sm text-gray-400 dark:text-neutral-500 text-center py-8">{t('emailagent.no_history')}</p>
+              ) : (
+                historyTasks.map((ht) => (
+                  <div key={ht.id} className="border border-gray-200 dark:border-neutral-800 rounded-xl p-4 space-y-2">
+                    <div className="flex items-center gap-2">
+                      <TipoBadge tipo={ht.tipo} />
+                      <StatusBadge status={ht.status} />
+                      <span className="text-xs text-gray-400 dark:text-neutral-500 ml-auto">{formatDateTime(ht.created_at)}</span>
+                    </div>
+                    <p className="text-sm font-medium text-gray-700 dark:text-neutral-300">"{ht.email_subject}"</p>
+                    {ht.email_sent && (
+                      <div className="bg-gray-50 dark:bg-neutral-800 border border-gray-200 dark:border-neutral-700 rounded-lg p-3 text-xs text-gray-600 dark:text-neutral-300 whitespace-pre-wrap leading-relaxed max-h-40 overflow-y-auto">
+                        {ht.email_sent}
+                      </div>
+                    )}
+                    {ht.description && (
+                      <p className="text-xs text-amber-700 dark:text-amber-400">{ht.description}</p>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
         </div>
       )}
     </div>
@@ -466,6 +532,7 @@ function AutoEmailCard({ task }: { task: Task }) {
 
 // ─── Feedback Card ──────────────────────────────────────────────────
 function FeedbackCard({ feedback }: { feedback: Feedback }) {
+  const { t } = useTranslation()
   const [expanded, setExpanded] = useState(false)
 
   return (
@@ -473,20 +540,20 @@ function FeedbackCard({ feedback }: { feedback: Feedback }) {
       <div className="p-5" style={{ borderLeft: '4px solid #a855f7' }}>
         <div className="flex items-center gap-3 mb-3">
           <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full" style={{ background: '#a855f722', color: '#a855f7' }}>
-            Feedback
+            {t('emailagent.feedback')}
           </span>
           <span className="text-xs text-gray-400 dark:text-neutral-500">{formatDateTime(feedback.created_at)}</span>
         </div>
         <p className="font-semibold text-gray-800 dark:text-white">{feedback.email_from}</p>
         {feedback.motivo && (
-          <p className="text-sm text-purple-700 dark:text-purple-400 font-medium mt-1 mb-3">📌 {feedback.motivo}</p>
+          <p className="text-sm text-purple-700 dark:text-purple-400 font-medium mt-1 mb-3">{feedback.motivo}</p>
         )}
         <button
           onClick={() => setExpanded(!expanded)}
           className="flex items-center gap-1 text-xs text-gray-400 dark:text-neutral-500 hover:text-gray-600 dark:hover:text-neutral-300 mt-2"
         >
           {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-          {expanded ? 'Ocultar mensagem' : 'Ver mensagem completa'}
+          {expanded ? t('emailagent.hide_full') : t('emailagent.show_full')}
         </button>
         {expanded && (
           <div className="mt-2 bg-gray-50 dark:bg-neutral-800 border border-gray-200 dark:border-neutral-700 rounded-lg p-3 text-xs text-gray-600 dark:text-neutral-300 whitespace-pre-wrap leading-relaxed">

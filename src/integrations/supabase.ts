@@ -22,12 +22,36 @@ export type Database = {
           id: string
           title: string
           description: string | null
-          status: 'backlog' | 'in_progress' | 'review' | 'done'
+          status: 'backlog' | 'todo' | 'doing' | 'blocked' | 'done'
           assigned_to: string | null
           priority: 'low' | 'medium' | 'high'
           due_date: string | null
+          position: number
+          done_at: string | null
           created_at: string
           updated_at: string
+        }
+      }
+      meetings: {
+        Row: {
+          id: string
+          title: string
+          description: string | null
+          meeting_date: string
+          meeting_time: string
+          duration_minutes: number
+          location: string | null
+          created_by: string | null
+          recurring_weekly: boolean
+          created_at: string
+        }
+      }
+      meeting_participants: {
+        Row: {
+          id: string
+          meeting_id: string
+          participant_name: string
+          created_at: string
         }
       }
       financial_daily: {
@@ -274,6 +298,9 @@ export type Database = {
           knowledge_base: string
           max_history_messages: number
           gemini_model: string
+          trigger_keywords: string[]
+          require_keyword: boolean
+          agent_type: 'support' | 'sales'
           created_at: string
           updated_at: string
         }
@@ -300,6 +327,77 @@ export type Database = {
           status: string
           error_message: string | null
           created_at: string
+        }
+      }
+      ads_agent_actions: {
+        Row: {
+          id: string
+          action_type: string
+          campaign_id: string | null
+          campaign_name: string | null
+          source: string
+          details: Record<string, unknown>
+          status: string
+          error_message: string | null
+          created_at: string
+        }
+      }
+      ads_optimization_config: {
+        Row: {
+          id: string
+          target_cpa: number
+          min_roas: number
+          min_daily_budget: number
+          max_daily_budget: number
+          budget_increase_pct: number
+          budget_decrease_pct: number
+          min_spend_to_evaluate: number
+          min_impressions_to_evaluate: number
+          max_cpa_multiplier: number
+          pixel_id: string | null
+          page_id: string | null
+          auto_pause_enabled: boolean
+          auto_boost_enabled: boolean
+          optimizer_enabled: boolean
+          updated_at: string
+          created_at: string
+        }
+      }
+      instagram_leads: {
+        Row: {
+          id: string
+          username: string
+          ig_user_id: string | null
+          source: 'automation_comment' | 'dm' | 'manual'
+          source_automation_id: string | null
+          temperature: 'hot' | 'warm' | 'cold'
+          temperature_override: boolean
+          status: 'new' | 'contacted' | 'negotiating' | 'converted' | 'lost'
+          interaction_count: number
+          first_interaction_at: string
+          last_interaction_at: string
+          tags: string[]
+          notes: string | null
+          customer_email: string | null
+          tracked_link_sent: boolean
+          tracked_product_id: string | null
+          converted_at: string | null
+          conversion_value: number | null
+          created_at: string
+          updated_at: string
+        }
+      }
+      products: {
+        Row: {
+          id: string
+          name: string
+          description: string | null
+          price_brl: number
+          payment_link: string
+          payment_source: 'kiwify' | 'stripe'
+          is_active: boolean
+          created_at: string
+          updated_at: string
         }
       }
     }

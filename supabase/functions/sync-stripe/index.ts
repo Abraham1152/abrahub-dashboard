@@ -19,10 +19,109 @@ serve(async (req) => {
     const since = daysAgoUnix(90)
     let totalRecords = 0
 
-    // --- Fetch Charges with invoice expansion ---
-    const dailyRevenue: Record<string, { stripe: number; fees: number }> = {}
+    // --- PRE-PASS: Fetch subscriptions to build amount → interval map ---
+    const amountToInterval: Record<number, string> = {} // amount_in_centavos -> 'month' | 'year'
+    const customerToInterval: Record<string, string> = {} // customer_id -> interval
     let hasMore = true
     let startingAfter: string | undefined
+
+    while (hasMore) {
+      const params = new URLSearchParams({ 'limit': '100', 'status': 'all' })
+      if (startingAfter) params.set('starting_after', startingAfter)
+
+      const res = await fetch(`https://api.stripe.com/v1/subscriptions?${params}`, {
+        headers: { 'Authorization': `Bearer ${stripeKey}` },
+      })
+      const subs = await res.json()
+      if (subs.error) break
+
+      for (const sub of subs.data || []) {
+        const item = sub.items?.data?.[0]
+        const interval = item?.price?.recurring?.interval || sub.plan?.interval
+        const unitAmount = item?.price?.unit_amount || sub.plan?.amount
+
+        if (interval && unitAmount) {
+          amountToInterval[unitAmount] = interval
+        }
+        if (interval && sub.customer) {
+          const custId = typeof sub.customer === 'string' ? sub.customer : sub.customer.id
+          customerToInterval[custId] = interval
+        }
+      }
+
+      hasMore = subs.has_more
+      if (hasMore && subs.data?.length > 0) {
+        startingAfter = subs.data[subs.data.length - 1].id
+      }
+    }
+
+    // --- Also fetch invoices to build a secondary map via line descriptions ---
+    // New Stripe API removed charge/subscription/payment_intent from invoice response
+    // But invoice.parent.subscription_details.subscription still exists
+    // And line descriptions contain "/ year" or "/ month"
+    const invoiceCustomerType: Record<string, Record<number, string>> = {} // customer -> { amount -> interval }
+    hasMore = true
+    startingAfter = undefined
+
+    while (hasMore) {
+      const params = new URLSearchParams({
+        'created[gte]': since.toString(),
+        'limit': '100',
+      })
+      if (startingAfter) params.set('starting_after', startingAfter)
+
+      const res = await fetch(`https://api.stripe.com/v1/invoices?${params}`, {
+        headers: { 'Authorization': `Bearer ${stripeKey}` },
+      })
+      const invoices = await res.json()
+      if (invoices.error) break
+
+      for (const inv of invoices.data || []) {
+        const lineDesc = inv.lines?.data?.[0]?.description || ''
+        const customer = typeof inv.customer === 'string' ? inv.customer : inv.customer?.id
+        const amountPaid = inv.amount_paid || 0
+
+        let interval = ''
+        if (lineDesc.includes('/ year') || lineDesc.includes('/ ano')) {
+          interval = 'year'
+        } else if (lineDesc.includes('/ month') || lineDesc.includes('/ mês') || lineDesc.includes('/ mes')) {
+          interval = 'month'
+        }
+
+        // Also try via parent.subscription_details
+        if (!interval && inv.parent?.subscription_details?.subscription) {
+          const subId = inv.parent.subscription_details.subscription
+          if (typeof subId === 'string') {
+            try {
+              const subRes = await fetch(`https://api.stripe.com/v1/subscriptions/${subId}`, {
+                headers: { 'Authorization': `Bearer ${stripeKey}` },
+              })
+              const sub = await subRes.json()
+              if (!sub.error) {
+                interval = sub.items?.data?.[0]?.price?.recurring?.interval || sub.plan?.interval || ''
+              }
+            } catch { /* continue */ }
+          }
+        }
+
+        if (interval && customer && amountPaid > 0) {
+          if (!invoiceCustomerType[customer]) invoiceCustomerType[customer] = {}
+          invoiceCustomerType[customer][amountPaid] = interval
+          // Also add to amount map as additional data
+          if (!amountToInterval[amountPaid]) amountToInterval[amountPaid] = interval
+        }
+      }
+
+      hasMore = invoices.has_more
+      if (hasMore && invoices.data?.length > 0) {
+        startingAfter = invoices.data[invoices.data.length - 1].id
+      }
+    }
+
+    // --- PASS 1: Fetch Charges ---
+    const dailyRevenue: Record<string, { stripe: number; fees: number }> = {}
+    hasMore = true
+    startingAfter = undefined
 
     while (hasMore) {
       const params = new URLSearchParams({
@@ -45,25 +144,31 @@ serve(async (req) => {
         const date = new Date(charge.created * 1000).toISOString().split('T')[0]
         const amount = charge.amount / 100
         const fee = charge.balance_transaction?.fee ? charge.balance_transaction.fee / 100 : 0
+        const custId = typeof charge.customer === 'string' ? charge.customer : charge.customer?.id || ''
 
         // Aggregate daily
         if (!dailyRevenue[date]) dailyRevenue[date] = { stripe: 0, fees: 0 }
         dailyRevenue[date].stripe += amount
         dailyRevenue[date].fees += fee
 
-        // Determine subscription type
+        // Determine subscription type using multiple strategies
         let txType = 'one_time'
         let productName = charge.description || 'Pagamento Stripe'
 
-        if (charge.invoice) {
-          // Has invoice = subscription charge
-          txType = 'recurring'
-          // Try to extract product name from description
-          if (charge.description) {
-            if (charge.description.toLowerCase().includes('anual') || charge.description.toLowerCase().includes('annual') || charge.description.toLowerCase().includes('yearly')) {
-              txType = 'annual'
-            }
-          }
+        // Strategy 1: Match by amount (centavos) → interval from subscriptions
+        if (amountToInterval[charge.amount]) {
+          const interval = amountToInterval[charge.amount]
+          txType = interval === 'year' ? 'annual' : 'recurring'
+        }
+        // Strategy 2: Match by customer+amount from invoices
+        else if (custId && invoiceCustomerType[custId]?.[charge.amount]) {
+          const interval = invoiceCustomerType[custId][charge.amount]
+          txType = interval === 'year' ? 'annual' : 'recurring'
+        }
+        // Strategy 3: Match by customer's subscription
+        else if (custId && customerToInterval[custId]) {
+          const interval = customerToInterval[custId]
+          txType = interval === 'year' ? 'annual' : 'recurring'
         }
 
         // Clean up product name
@@ -85,7 +190,7 @@ serve(async (req) => {
             customer_email: charge.billing_details?.email || charge.receipt_email || null,
             metadata: {
               fee,
-              invoice_id: charge.invoice || null,
+              payment_intent: charge.payment_intent || null,
               payment_method: charge.payment_method_details?.type || null,
             },
           },
@@ -100,7 +205,7 @@ serve(async (req) => {
       }
     }
 
-    // --- Fetch Refunds ---
+    // --- PASS 2: Fetch Refunds ---
     const dailyRefunds: Record<string, number> = {}
     hasMore = true
     startingAfter = undefined
@@ -149,50 +254,6 @@ serve(async (req) => {
       }
     }
 
-    // --- Also fetch subscriptions for better type detection ---
-    hasMore = true
-    startingAfter = undefined
-    const subscriptionIntervals: Record<string, string> = {} // charge_id -> interval
-
-    while (hasMore) {
-      const params = new URLSearchParams({
-        'created[gte]': since.toString(),
-        'limit': '100',
-        'expand[]': 'data.plan',
-      })
-      if (startingAfter) params.set('starting_after', startingAfter)
-
-      const res = await fetch(`https://api.stripe.com/v1/invoices?${params}`, {
-        headers: { 'Authorization': `Bearer ${stripeKey}` },
-      })
-      const invoices = await res.json()
-
-      if (invoices.error) break // Non-critical, continue without
-
-      for (const inv of invoices.data || []) {
-        if (!inv.charge) continue
-        const interval = inv.lines?.data?.[0]?.plan?.interval || inv.lines?.data?.[0]?.price?.recurring?.interval
-        const productDesc = inv.lines?.data?.[0]?.description || inv.lines?.data?.[0]?.plan?.nickname || null
-
-        if (interval) {
-          const txType = interval === 'year' ? 'annual' : 'recurring'
-          // Update the already-inserted transaction with correct type and product name
-          const updateData: Record<string, unknown> = { type: txType }
-          if (productDesc) updateData.product_name = productDesc.substring(0, 200)
-
-          await supabase
-            .from('revenue_transactions')
-            .update(updateData)
-            .eq('transaction_id', inv.charge)
-        }
-      }
-
-      hasMore = invoices.has_more
-      if (hasMore && invoices.data.length > 0) {
-        startingAfter = invoices.data[invoices.data.length - 1].id
-      }
-    }
-
     // --- Upsert into financial_daily ---
     const allDates = new Set([...Object.keys(dailyRevenue), ...Object.keys(dailyRefunds)])
 
@@ -220,7 +281,12 @@ serve(async (req) => {
     }
 
     await logSync('stripe', 'success', totalRecords)
-    return jsonResponse({ success: true, records: totalRecords })
+    return jsonResponse({
+      success: true,
+      records: totalRecords,
+      price_map: amountToInterval,
+      customer_map_size: Object.keys(customerToInterval).length,
+    })
 
   } catch (error) {
     const msg = error instanceof Error ? error.message : 'Unknown error'

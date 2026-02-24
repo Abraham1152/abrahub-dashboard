@@ -1,0 +1,5 @@
+INSERT INTO products (name, description, price_brl, payment_link, payment_source, is_active) VALUES
+  ('ABRAhub Comunidade (Mensal)', 'Assinatura mensal da comunidade ABRAhub Studio. Acesso a formacao Orquestrador Iniciante e Avancado, labs semanais, networking entre criadores de IA.', 89.00, 'https://comunidade.abrahub.com/checkout/abrahub-comunidade', 'stripe', true),
+  ('ABRAhub Comunidade (Anual)', 'Assinatura anual com 50% de desconto vs mensal. Acesso completo: Orquestrador Iniciante, Avancado, labs, ABRAhub Cinema.', 534.00, 'https://comunidade.abrahub.com/checkout/abrahub-comunidade', 'stripe', true),
+  ('ABRAhub Comunidade (Anual - PIX/Parcelado 5x)', 'Plano anual via Kiwify para pagamento no PIX ou parcelado em ate 5x. Mesmo acesso da assinatura anual.', 534.00, 'https://pay.kiwify.com.br/btFZj9x', 'kiwify', true),
+  ('Creative Engine (Gratuito)', 'Chatbot gratuito no ChatGPT gerador de prompts cinematograficos. Porta de entrada para o ecossistema ABRAhub.', 0.00, 'https://chatgpt.com/g/g-695bce332ef08191a69dd0cde2c1e796-abrahub-creative-engine-v1', 'kiwify', true);

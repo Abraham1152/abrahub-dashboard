@@ -233,8 +233,15 @@ async function executarReembolso(cobrancaId: string, assinaturaId?: string) {
 }
 
 // ─── Email classification ──────────────────────────────────────────
-async function classificarEmail(remetente: string, assunto: string, corpo: string) {
-  const conteudo = `${PROMPT_BASE}\n\nDe: ${remetente}\nAssunto: ${assunto}\n\n${corpo}`
+async function classificarEmail(remetente: string, assunto: string, corpo: string, historico?: string) {
+  let conteudo = PROMPT_BASE
+
+  if (historico) {
+    conteudo += `\n\n=== HISTÓRICO DE INTERAÇÕES COM ESTE CLIENTE ===\n${historico}\n=== FIM DO HISTÓRICO ===\n\nUse o histórico acima para dar continuidade ao atendimento. Se o cliente já foi atendido antes, considere o contexto. Não repita informações já enviadas.`
+  }
+
+  conteudo += `\n\nDe: ${remetente}\nAssunto: ${assunto}\n\n${corpo}`
+
   let texto = await callGemini(conteudo)
   if (texto.includes('```')) {
     texto = texto.split('```')[1].replace('json', '').trim()
@@ -261,8 +268,8 @@ async function detectarFeedback(assunto: string, corpo: string) {
 }
 
 // ─── Process a single email ────────────────────────────────────────
-async function processarEmail(remetente: string, assunto: string, corpo: string) {
-  const resultado = await classificarEmail(remetente, assunto, corpo)
+async function processarEmail(remetente: string, assunto: string, corpo: string, historico?: string) {
+  const resultado = await classificarEmail(remetente, assunto, corpo, historico)
 
   if (resultado.tipo === 'REEMBOLSO') {
     try {
@@ -309,16 +316,39 @@ serve(async (req) => {
 
   try {
     // GET /tasks — list tasks and stats
+    // ?days=7 for last 7 days, default=0 (today only)
     if (req.method === 'GET' && (path === '/tasks' || path === '' || path === '/')) {
-      const today = new Date().toISOString().split('T')[0]
+      const days = parseInt(url.searchParams.get('days') || '0')
+      const since = new Date()
+      since.setDate(since.getDate() - days)
+      const sinceStr = since.toISOString().split('T')[0]
 
       const { data: tasks } = await supabase
         .from('email_tasks')
         .select('*')
-        .gte('created_at', today + 'T00:00:00')
+        .gte('created_at', sinceStr + 'T00:00:00')
         .order('created_at', { ascending: false })
 
       const allTasks = tasks || []
+
+      // Count previous interactions per sender (beyond the current result set)
+      const senderEmails = [...new Set(allTasks.map((t: any) => extrairEmail(t.email_from)))]
+      const historyCounts: Record<string, number> = {}
+      for (const email of senderEmails) {
+        const { count } = await supabase
+          .from('email_tasks')
+          .select('*', { count: 'exact', head: true })
+          .ilike('email_from', `%${email}%`)
+          .lt('created_at', sinceStr + 'T00:00:00')
+        historyCounts[email] = count || 0
+      }
+
+      // Attach history_count to each task
+      const tasksWithHistory = allTasks.map((t: any) => ({
+        ...t,
+        history_count: historyCounts[extrairEmail(t.email_from)] || 0,
+      }))
+
       const stats = {
         total: allTasks.length,
         pending: allTasks.filter((t: any) => t.status === 'pending').length,
@@ -326,7 +356,22 @@ serve(async (req) => {
         done: allTasks.filter((t: any) => t.status === 'done').length,
       }
 
-      return new Response(JSON.stringify({ tasks: allTasks, stats }), {
+      return new Response(JSON.stringify({ tasks: tasksWithHistory, stats }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
+    }
+
+    // GET /history/:email — full history of a sender
+    if (req.method === 'GET' && path.startsWith('/history/')) {
+      const email = decodeURIComponent(path.split('/history/')[1])
+      const { data } = await supabase
+        .from('email_tasks')
+        .select('*')
+        .ilike('email_from', `%${email}%`)
+        .order('created_at', { ascending: false })
+        .limit(50)
+
+      return new Response(JSON.stringify({ history: data || [] }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       })
     }
@@ -360,8 +405,25 @@ serve(async (req) => {
         })
       }
 
+      // Fetch previous interactions with this sender
+      const emailClean = extrairEmail(remetente)
+      const { data: prevTasks } = await supabase
+        .from('email_tasks')
+        .select('email_subject, tipo, email_sent, created_at')
+        .ilike('email_from', `%${emailClean}%`)
+        .order('created_at', { ascending: false })
+        .limit(10)
+
+      let historico = ''
+      if (prevTasks && prevTasks.length > 0) {
+        historico = prevTasks.reverse().map((t: any) => {
+          const data = new Date(t.created_at).toLocaleDateString('pt-BR')
+          return `[${data}] Assunto: ${t.email_subject} | Tipo: ${t.tipo}\nResposta enviada: ${t.email_sent || '(sem resposta)'}`
+        }).join('\n\n---\n\n')
+      }
+
       // Process as support email
-      const resultado = await processarEmail(remetente, assunto, corpo)
+      const resultado = await processarEmail(remetente, assunto, corpo, historico || undefined)
 
       const status = resultado.precisa_acao_manual ? 'pending' : 'auto'
       await supabase.from('email_tasks').insert({

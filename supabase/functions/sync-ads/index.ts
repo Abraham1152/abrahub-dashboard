@@ -162,6 +162,30 @@ serve(async (req) => {
     totalRecords++
 
     await logSync('ads', 'success', totalRecords)
+
+    // Trigger autonomous optimizer after successful sync
+    try {
+      const { data: optConfig } = await supabase
+        .from('ads_optimization_config')
+        .select('optimizer_enabled')
+        .single()
+
+      if (optConfig?.optimizer_enabled) {
+        await fetch(
+          `${Deno.env.get('SUPABASE_URL')}/functions/v1/ads-optimizer`,
+          {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`,
+              'Content-Type': 'application/json',
+            },
+          }
+        )
+      }
+    } catch {
+      // Optimizer failure should not fail the sync
+    }
+
     return jsonResponse({
       success: true,
       records: totalRecords,

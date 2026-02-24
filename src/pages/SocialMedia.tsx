@@ -13,10 +13,6 @@ import {
   ResponsiveContainer,
 } from 'recharts'
 import {
-  BarChart,
-  Bar,
-} from 'recharts'
-import {
   Youtube,
   Instagram,
   Users,
@@ -212,37 +208,49 @@ function ChannelTab({ channelId }: { channelId: string }) {
   const avgViewsDay = period > 0 ? Math.round(totalViewsGained / period) : 0
   const totalChannelRevenue = revenueData.reduce((s, d) => s + (Number(d.revenue) || 0), 0)
 
-  // Subscriber growth chart — weekly aggregation (7-day intervals)
-  const subsChart = useMemo(() => {
-    if (dailyData.length < 2) return []
-    const dailyDeltas = dailyData.slice(1).map((d, i) => ({
-      date: d.date,
-      novos: d.subscribers - dailyData[i].subscribers,
-    }))
-    const weeks: { date: string; novos: number }[] = []
-    for (let i = 0; i < dailyDeltas.length; i += 7) {
-      const chunk = dailyDeltas.slice(i, i + 7)
-      const lastDay = chunk[chunk.length - 1].date
-      const [, m, d] = lastDay.split('-')
-      const novos = chunk.reduce((s, c) => s + c.novos, 0)
-      weeks.push({ date: `${m}/${d}`, novos })
+  // Generate all dates in selected period for filling gaps
+  const allDatesInPeriod = useMemo(() => {
+    const dates: string[] = []
+    const now = new Date()
+    const start = new Date(now)
+    start.setDate(now.getDate() - period)
+    const cur = new Date(start)
+    while (cur <= now) {
+      dates.push(`${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, '0')}-${String(cur.getDate()).padStart(2, '0')}`)
+      cur.setDate(cur.getDate() + 1)
     }
-    return weeks
+    return dates
+  }, [period])
+
+  // Build lookup from dailyData
+  const dailyByDate = useMemo(() => {
+    const map: Record<string, any> = {}
+    dailyData.forEach(d => { map[d.date] = d })
+    return map
   }, [dailyData])
 
-  // Views chart — weekly aggregation (7-day intervals)
+  // Subscriber growth chart — fill ALL days in period
+  const subsChart = useMemo(() => {
+    if (dailyData.length === 0) return []
+    // Use the last known subscriber count to fill gaps
+    let lastSubs = dailyData[0]?.subscribers || 0
+    return allDatesInPeriod.map(dateStr => {
+      const [, m, day] = dateStr.split('-')
+      const d = dailyByDate[dateStr]
+      if (d) lastSubs = d.subscribers || lastSubs
+      return { date: `${m}/${day}`, subscribers: lastSubs }
+    })
+  }, [dailyData, allDatesInPeriod, dailyByDate])
+
+  // Views chart — fill ALL days in period (0 for missing)
   const viewsChart = useMemo(() => {
     if (dailyData.length === 0) return []
-    const weeks: { date: string; views: number }[] = []
-    for (let i = 0; i < dailyData.length; i += 7) {
-      const chunk = dailyData.slice(i, i + 7)
-      const lastDay = chunk[chunk.length - 1].date
-      const [, m, d] = lastDay.split('-')
-      const views = chunk.reduce((s, c) => s + (c.views_gained || 0), 0)
-      weeks.push({ date: `${m}/${d}`, views })
-    }
-    return weeks
-  }, [dailyData])
+    return allDatesInPeriod.map(dateStr => {
+      const [, m, day] = dateStr.split('-')
+      const d = dailyByDate[dateStr]
+      return { date: `${m}/${day}`, views: d?.views_gained || 0 }
+    })
+  }, [dailyData, allDatesInPeriod, dailyByDate])
 
   // Monthly growth table
   const MONTH_LABELS = lang === 'pt'
@@ -356,7 +364,7 @@ function ChannelTab({ channelId }: { channelId: string }) {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Subscriber Growth */}
         <div className="card p-6">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">{t('social.new_subs_day')}</h2>
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">{t('social.subscribers')}</h2>
           <ResponsiveContainer width="100%" height={280}>
             <AreaChart data={subsChart}>
               <defs>
@@ -367,9 +375,9 @@ function ChannelTab({ channelId }: { channelId: string }) {
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke={isDark ? '#27272a' : '#f3f4f6'} vertical={false} />
               <XAxis dataKey="date" stroke={isDark ? '#52525b' : '#9ca3af'} fontSize={11} tickLine={false} axisLine={false} />
-              <YAxis stroke={isDark ? '#52525b' : '#9ca3af'} fontSize={11} tickLine={false} axisLine={false} />
-              <Tooltip contentStyle={tooltipStyle} formatter={(v: number) => [`${v >= 0 ? '+' : ''}${fmt(v)}`, t('social.new_subs')]} />
-              <Area type="natural" dataKey="novos" stroke={channel.color} fill={`url(#grad-subs-${channelId})`} strokeWidth={2} />
+              <YAxis stroke={isDark ? '#52525b' : '#9ca3af'} fontSize={11} tickLine={false} axisLine={false} domain={['dataMin - 100', 'dataMax + 100']} tickFormatter={(v: number) => fmt(v)} />
+              <Tooltip contentStyle={tooltipStyle} formatter={(v: number) => [fmt(v), t('social.subscribers')]} />
+              <Area type="natural" dataKey="subscribers" stroke={channel.color} fill={`url(#grad-subs-${channelId})`} strokeWidth={2.5} dot={{ r: 3, fill: channel.color }} />
             </AreaChart>
           </ResponsiveContainer>
         </div>
@@ -389,7 +397,7 @@ function ChannelTab({ channelId }: { channelId: string }) {
               <XAxis dataKey="date" stroke={isDark ? '#52525b' : '#9ca3af'} fontSize={11} tickLine={false} axisLine={false} />
               <YAxis stroke={isDark ? '#52525b' : '#9ca3af'} fontSize={11} tickLine={false} axisLine={false} />
               <Tooltip contentStyle={tooltipStyle} formatter={(v: number) => [fmt(v), t('social.views')]} />
-              <Area type="natural" dataKey="views" stroke={channel.color} fill={`url(#grad-views-${channelId})`} strokeWidth={2} />
+              <Area type="natural" dataKey="views" stroke={channel.color} fill={`url(#grad-views-${channelId})`} strokeWidth={2.5} dot={{ r: 3, fill: channel.color }} />
             </AreaChart>
           </ResponsiveContainer>
         </div>
@@ -491,12 +499,6 @@ function InstagramTab() {
     boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
   }
 
-  const sinceDate = useMemo(() => {
-    const d = new Date()
-    d.setDate(d.getDate() - period)
-    return d.toISOString().split('T')[0]
-  }, [period])
-
   const sinceISO = useMemo(() => {
     const d = new Date()
     d.setDate(d.getDate() - period)
@@ -577,57 +579,80 @@ function InstagramTab() {
   const totalPostLikes = filteredPosts.reduce((s, p) => s + (p.like_count || 0), 0)
   const totalPostComments = filteredPosts.reduce((s, p) => s + (p.comments_count || 0), 0)
 
-  // Post engagement chart — group posts by week based on their timestamp
+  // Post engagement chart — fill ALL weeks in period, group posts by week
   const postEngagementChart = useMemo(() => {
-    if (filteredPosts.length === 0) return []
-    const byWeek: Record<string, { likes: number; comments: number; saves: number; shares: number; reach: number; count: number }> = {}
+    // Build post data by week key
+    const byWeek: Record<string, { engagement: number; reach: number; count: number }> = {}
     for (const post of filteredPosts) {
       if (!post.timestamp) continue
       const d = new Date(post.timestamp)
-      // Get the Monday of this week
       const day = d.getDay()
       const monday = new Date(d)
       monday.setDate(d.getDate() - ((day + 6) % 7))
-      const weekKey = monday.toISOString().split('T')[0]
-      if (!byWeek[weekKey]) {
-        byWeek[weekKey] = { likes: 0, comments: 0, saves: 0, shares: 0, reach: 0, count: 0 }
-      }
-      byWeek[weekKey].likes += post.like_count || 0
-      byWeek[weekKey].comments += post.comments_count || 0
-      byWeek[weekKey].saves += post.saves || 0
-      byWeek[weekKey].shares += post.shares || 0
+      const weekKey = `${monday.getFullYear()}-${String(monday.getMonth() + 1).padStart(2, '0')}-${String(monday.getDate()).padStart(2, '0')}`
+      if (!byWeek[weekKey]) byWeek[weekKey] = { engagement: 0, reach: 0, count: 0 }
+      byWeek[weekKey].engagement += (post.like_count || 0) + (post.comments_count || 0) + (post.saves || 0) + (post.shares || 0)
       byWeek[weekKey].reach += post.reach || 0
       byWeek[weekKey].count++
     }
-    return Object.entries(byWeek)
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([week, data]) => {
-        const [, m, d] = week.split('-')
-        return {
-          date: `${m}/${d}`,
-          engagement: data.likes + data.comments + data.saves + data.shares,
-          reach: data.reach,
-          posts: data.count,
-        }
-      })
-  }, [filteredPosts])
 
-  // Reach per post chart
-  const reachChart = useMemo(() => {
-    if (filteredPosts.length === 0) return []
-    // Show individual posts sorted by date
-    return filteredPosts
-      .filter(p => p.timestamp && p.reach > 0)
-      .map(p => {
-        const d = new Date(p.timestamp)
-        const label = `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`
-        return {
-          date: label,
-          reach: p.reach || 0,
-          engagement: (p.like_count || 0) + (p.comments_count || 0),
-        }
+    // Generate ALL weeks in the period
+    const now = new Date()
+    const start = new Date(now)
+    start.setDate(now.getDate() - period)
+    // Align start to Monday
+    const startDay = start.getDay()
+    start.setDate(start.getDate() - ((startDay + 6) % 7))
+
+    const weeks: { date: string; engagement: number; reach: number; posts: number }[] = []
+    const cur = new Date(start)
+    while (cur <= now) {
+      const weekKey = `${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, '0')}-${String(cur.getDate()).padStart(2, '0')}`
+      const [, m, d] = weekKey.split('-')
+      const data = byWeek[weekKey]
+      weeks.push({
+        date: `${m}/${d}`,
+        engagement: data?.engagement || 0,
+        reach: data?.reach || 0,
+        posts: data?.count || 0,
       })
-  }, [filteredPosts])
+      cur.setDate(cur.getDate() + 7)
+    }
+    return weeks
+  }, [filteredPosts, period])
+
+  // Reach per post chart — fill ALL days in period
+  const reachChart = useMemo(() => {
+    // Build post reach by date
+    const byDate: Record<string, { reach: number; engagement: number }> = {}
+    for (const post of filteredPosts) {
+      if (!post.timestamp) continue
+      const d = new Date(post.timestamp)
+      const dateKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+      if (!byDate[dateKey]) byDate[dateKey] = { reach: 0, engagement: 0 }
+      byDate[dateKey].reach += post.reach || 0
+      byDate[dateKey].engagement += (post.like_count || 0) + (post.comments_count || 0)
+    }
+
+    // Fill all days in period
+    const now = new Date()
+    const start = new Date(now)
+    start.setDate(now.getDate() - period)
+    const days: { date: string; reach: number; engagement: number }[] = []
+    const cur = new Date(start)
+    while (cur <= now) {
+      const dateKey = `${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, '0')}-${String(cur.getDate()).padStart(2, '0')}`
+      const [, m, day] = dateKey.split('-')
+      const data = byDate[dateKey]
+      days.push({
+        date: `${m}/${day}`,
+        reach: data?.reach || 0,
+        engagement: data?.engagement || 0,
+      })
+      cur.setDate(cur.getDate() + 1)
+    }
+    return days
+  }, [filteredPosts, period])
 
   // Daily data chart (if we have daily metrics)
   const dailyChart = useMemo(() => {

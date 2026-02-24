@@ -1,6 +1,7 @@
 import { supabase } from '@/integrations/supabase'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useTheme } from '@/stores/themeStore'
+import { useTranslation } from '@/i18n/useTranslation'
 import { useState, useMemo, useCallback } from 'react'
 import {
   Plus,
@@ -47,18 +48,15 @@ interface ExpenseForm {
 
 // --- Constants ---
 
-const MONTHS = [
+const MONTHS_PT = [
   'Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun',
   'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez',
 ]
 
-const CATEGORY_LABELS: Record<Category, string> = {
-  tool: 'Ferramenta',
-  salary: 'Salario',
-  tax: 'Imposto',
-  prolabore: 'Prolabore',
-  other: 'Outro',
-}
+const MONTHS_EN = [
+  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+]
 
 const CATEGORY_COLORS: Record<Category, { bg: string; text: string }> = {
   tool: { bg: 'bg-blue-100 dark:bg-blue-500/20', text: 'text-blue-700 dark:text-blue-400' },
@@ -121,7 +119,10 @@ const emptyForm: ExpenseForm = {
 
 export default function ExpensesPage() {
   useTheme()
+  const { t, lang } = useTranslation()
   const queryClient = useQueryClient()
+
+  const MONTHS = lang === 'en' ? MONTHS_EN : MONTHS_PT
 
   // Month/year selection
   const now = new Date()
@@ -332,9 +333,9 @@ export default function ExpensesPage() {
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-4">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Gastos Mensais</h1>
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">{t('expenses.title')}</h1>
           <p className="text-gray-500 dark:text-neutral-500 text-sm mt-1">
-            Gerencie as despesas mensais da empresa
+            {t('expenses.subtitle')}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -344,14 +345,14 @@ export default function ExpensesPage() {
             className="flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-medium transition-colors disabled:opacity-50"
           >
             <Plus size={16} />
-            Adicionar Gasto
+            {t('expenses.add')}
           </button>
           <button
             onClick={() => setShowCopyConfirm(true)}
             className="flex items-center gap-2 px-4 py-2.5 bg-white dark:bg-neutral-800 border border-gray-200 dark:border-neutral-700 text-gray-700 dark:text-neutral-300 hover:bg-gray-50 dark:hover:bg-neutral-700 rounded-xl text-sm font-medium transition-colors"
           >
             <Copy size={16} />
-            Copiar Mes Anterior
+            {t('expenses.copy_prev')}
           </button>
         </div>
       </div>
@@ -397,36 +398,36 @@ export default function ExpensesPage() {
       {/* Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <SummaryCard
-          label="Total Gastos"
+          label={t('expenses.total')}
           value={formatBRL(totals.totalBRL)}
           icon={Wallet}
           iconBg="bg-orange-50 dark:bg-orange-500/10"
           iconColor="text-orange-500"
-          subtitle={totals.totalUSD > 0 ? `${formatUSD(totals.totalUSD)} em USD` : undefined}
+          subtitle={totals.totalUSD > 0 ? `${formatUSD(totals.totalUSD)} ${t('expenses.in_usd')}` : undefined}
         />
         <SummaryCard
-          label="Ferramentas"
+          label={t('expenses.tools')}
           value={formatBRL(totals.toolsBRL)}
           icon={DollarSign}
           iconBg="bg-blue-50 dark:bg-blue-500/10"
           iconColor="text-blue-500"
-          subtitle={`${expenses.filter((e) => e.category === 'tool').length} ferramentas`}
+          subtitle={`${expenses.filter((e) => e.category === 'tool').length} ${t('expenses.tools_count')}`}
         />
         <SummaryCard
-          label="Salarios / Prolabore"
+          label={t('expenses.salaries_label')}
           value={formatBRL(totals.salaryProlaboreBRL)}
           icon={Users}
           iconBg="bg-purple-50 dark:bg-purple-500/10"
           iconColor="text-purple-500"
-          subtitle={`${expenses.filter((e) => e.category === 'salary' || e.category === 'prolabore').length} pagamentos`}
+          subtitle={`${expenses.filter((e) => e.category === 'salary' || e.category === 'prolabore').length} ${t('expenses.payments')}`}
         />
         <SummaryCard
-          label="Impostos"
+          label={t('expenses.taxes')}
           value={formatBRL(totals.taxBRL)}
           icon={Receipt}
           iconBg="bg-red-50 dark:bg-red-500/10"
           iconColor="text-red-500"
-          subtitle={totals.totalBRL > 0 ? `${((totals.taxBRL / totals.totalBRL) * 100).toFixed(1)}% do total` : undefined}
+          subtitle={totals.totalBRL > 0 ? `${((totals.taxBRL / totals.totalBRL) * 100).toFixed(1)}% ${t('expenses.of_total')}` : undefined}
         />
       </div>
 
@@ -435,10 +436,10 @@ export default function ExpensesPage() {
         <div className="card p-6 text-center">
           <AlertTriangle className="mx-auto text-amber-500 mb-3" size={32} />
           <p className="text-gray-900 dark:text-white font-medium mb-1">
-            Nenhuma despesa para {MONTHS[selectedMonthIndex]} {selectedYear}
+            {t('expenses.no_expenses')} {MONTHS[selectedMonthIndex]} {selectedYear}
           </p>
           <p className="text-gray-500 dark:text-neutral-500 text-sm mb-4">
-            Deseja popular com a lista padrao de despesas recorrentes?
+            {t('expenses.seed_question')}
           </p>
           <div className="flex items-center justify-center gap-3">
             <button
@@ -446,18 +447,18 @@ export default function ExpensesPage() {
               disabled={seedExpenses.isPending}
               className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-medium transition-colors disabled:opacity-50"
             >
-              {seedExpenses.isPending ? 'Populando...' : 'Popular com Padrao'}
+              {seedExpenses.isPending ? t('expenses.seeding') : t('expenses.seed_button')}
             </button>
             <button
               onClick={() => setShowCopyConfirm(true)}
               className="px-5 py-2.5 bg-white dark:bg-neutral-800 border border-gray-200 dark:border-neutral-700 text-gray-700 dark:text-neutral-300 hover:bg-gray-50 dark:hover:bg-neutral-700 rounded-xl text-sm font-medium transition-colors"
             >
-              Copiar de Outro Mes
+              {t('expenses.copy_from')}
             </button>
           </div>
           {seedExpenses.isError && (
             <p className="text-red-500 text-sm mt-3">
-              Erro: {(seedExpenses.error as Error).message}
+              {t('expenses.error')} {(seedExpenses.error as Error).message}
             </p>
           )}
         </div>
@@ -470,13 +471,13 @@ export default function ExpensesPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-gray-500 dark:text-neutral-500 text-xs uppercase tracking-wider border-b border-gray-200 dark:border-neutral-800">
-                  <th className="text-left py-3 px-4">Nome</th>
-                  <th className="text-left py-3 px-4">Descricao</th>
-                  <th className="text-left py-3 px-4">Categoria</th>
-                  <th className="text-right py-3 px-4">USD</th>
-                  <th className="text-right py-3 px-4">BRL</th>
-                  <th className="text-left py-3 px-4">Responsavel</th>
-                  <th className="text-center py-3 px-4 w-28">Acoes</th>
+                  <th className="text-left py-3 px-4">{t('expenses.name')}</th>
+                  <th className="text-left py-3 px-4">{t('expenses.description')}</th>
+                  <th className="text-left py-3 px-4">{t('expenses.category')}</th>
+                  <th className="text-right py-3 px-4">{t('expenses.usd')}</th>
+                  <th className="text-right py-3 px-4">{t('expenses.brl')}</th>
+                  <th className="text-left py-3 px-4">{t('expenses.responsible')}</th>
+                  <th className="text-center py-3 px-4 w-28">{t('expenses.actions')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -486,7 +487,7 @@ export default function ExpensesPage() {
                     <td className="py-2 px-4">
                       <input
                         className={inputClass}
-                        placeholder="Nome"
+                        placeholder={t('expenses.name')}
                         value={addForm.name}
                         onChange={(e) => setAddForm({ ...addForm, name: e.target.value })}
                       />
@@ -494,7 +495,7 @@ export default function ExpensesPage() {
                     <td className="py-2 px-4">
                       <input
                         className={inputClass}
-                        placeholder="Descricao"
+                        placeholder={t('expenses.description')}
                         value={addForm.description}
                         onChange={(e) => setAddForm({ ...addForm, description: e.target.value })}
                       />
@@ -505,8 +506,8 @@ export default function ExpensesPage() {
                         value={addForm.category}
                         onChange={(e) => setAddForm({ ...addForm, category: e.target.value as Category })}
                       >
-                        {Object.entries(CATEGORY_LABELS).map(([val, label]) => (
-                          <option key={val} value={val}>{label}</option>
+                        {(['tool', 'salary', 'tax', 'prolabore', 'other'] as Category[]).map((cat) => (
+                          <option key={cat} value={cat}>{t(`expenses.${cat}`)}</option>
                         ))}
                       </select>
                     </td>
@@ -529,7 +530,7 @@ export default function ExpensesPage() {
                     <td className="py-2 px-4">
                       <input
                         className={inputClass}
-                        placeholder="Responsavel"
+                        placeholder={t('expenses.responsible')}
                         value={addForm.responsible}
                         onChange={(e) => setAddForm({ ...addForm, responsible: e.target.value })}
                       />
@@ -540,14 +541,14 @@ export default function ExpensesPage() {
                           onClick={() => addExpense.mutate(addForm)}
                           disabled={!addForm.name.trim() || !addForm.price_brl.trim() || addExpense.isPending}
                           className="p-2 text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-500/10 rounded-lg transition-colors disabled:opacity-30"
-                          title="Salvar"
+                          title={t('expenses.save')}
                         >
                           <Save size={16} />
                         </button>
                         <button
                           onClick={() => { setIsAdding(false); setAddForm(emptyForm) }}
                           className="p-2 text-gray-400 hover:bg-gray-100 dark:hover:bg-neutral-800 rounded-lg transition-colors"
-                          title="Cancelar"
+                          title={t('expenses.cancel')}
                         >
                           <X size={16} />
                         </button>
@@ -584,8 +585,8 @@ export default function ExpensesPage() {
                             value={editForm.category}
                             onChange={(e) => setEditForm({ ...editForm, category: e.target.value as Category })}
                           >
-                            {Object.entries(CATEGORY_LABELS).map(([val, label]) => (
-                              <option key={val} value={val}>{label}</option>
+                            {(['tool', 'salary', 'tax', 'prolabore', 'other'] as Category[]).map((cat) => (
+                              <option key={cat} value={cat}>{t(`expenses.${cat}`)}</option>
                             ))}
                           </select>
                         </td>
@@ -616,14 +617,14 @@ export default function ExpensesPage() {
                               onClick={() => updateExpense.mutate({ id: expense.id, form: editForm })}
                               disabled={!editForm.name.trim() || !editForm.price_brl.trim() || updateExpense.isPending}
                               className="p-2 text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-500/10 rounded-lg transition-colors disabled:opacity-30"
-                              title="Salvar"
+                              title={t('expenses.save')}
                             >
                               <Save size={16} />
                             </button>
                             <button
                               onClick={cancelEdit}
                               className="p-2 text-gray-400 hover:bg-gray-100 dark:hover:bg-neutral-800 rounded-lg transition-colors"
-                              title="Cancelar"
+                              title={t('expenses.cancel')}
                             >
                               <X size={16} />
                             </button>
@@ -670,7 +671,7 @@ export default function ExpensesPage() {
                             <button
                               onClick={() => setDeleteConfirmId(null)}
                               className="p-2 text-gray-400 hover:bg-gray-100 dark:hover:bg-neutral-800 rounded-lg transition-colors"
-                              title="Cancelar"
+                              title={t('expenses.cancel')}
                             >
                               <X size={16} />
                             </button>
@@ -680,14 +681,14 @@ export default function ExpensesPage() {
                             <button
                               onClick={() => startEdit(expense)}
                               className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-500/10 rounded-lg transition-colors"
-                              title="Editar"
+                              title={t('common.edit')}
                             >
                               <Pencil size={16} />
                             </button>
                             <button
                               onClick={() => setDeleteConfirmId(expense.id)}
                               className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-lg transition-colors"
-                              title="Excluir"
+                              title={t('common.delete')}
                             >
                               <Trash2 size={16} />
                             </button>
@@ -702,7 +703,7 @@ export default function ExpensesPage() {
                 {expenses.length > 0 && (
                   <tr className="bg-gray-50 dark:bg-neutral-800/50 font-semibold">
                     <td className="py-3 px-4 text-gray-900 dark:text-white" colSpan={3}>
-                      Total ({expenses.length} itens)
+                      {t('expenses.total_items', { count: expenses.length })}
                     </td>
                     <td className="py-3 px-4 text-right text-gray-900 dark:text-white tabular-nums">
                       {totals.totalUSD > 0 ? formatUSD(totals.totalUSD) : '\u2014'}
@@ -720,17 +721,17 @@ export default function ExpensesPage() {
           {/* Mutation errors */}
           {addExpense.isError && (
             <div className="px-4 py-3 text-red-500 text-sm border-t border-gray-200 dark:border-neutral-800">
-              Erro ao adicionar: {(addExpense.error as Error).message}
+              {t('expenses.error_add')} {(addExpense.error as Error).message}
             </div>
           )}
           {updateExpense.isError && (
             <div className="px-4 py-3 text-red-500 text-sm border-t border-gray-200 dark:border-neutral-800">
-              Erro ao atualizar: {(updateExpense.error as Error).message}
+              {t('expenses.error_update')} {(updateExpense.error as Error).message}
             </div>
           )}
           {deleteExpense.isError && (
             <div className="px-4 py-3 text-red-500 text-sm border-t border-gray-200 dark:border-neutral-800">
-              Erro ao excluir: {(deleteExpense.error as Error).message}
+              {t('expenses.error_delete')} {(deleteExpense.error as Error).message}
             </div>
           )}
         </div>
@@ -739,9 +740,9 @@ export default function ExpensesPage() {
       {/* Copy from previous month modal */}
       {showCopyConfirm && (
         <ConfirmModal
-          title="Copiar Despesas do Mes Anterior"
-          message={`Deseja copiar todas as despesas de ${getPreviousMonth()} para ${selectedMonth}? Despesas com nomes duplicados nao serao copiadas.`}
-          confirmLabel={copyFromMonth.isPending ? 'Copiando...' : 'Copiar'}
+          title={t('expenses.copy_title')}
+          message={`${t('expenses.copy_confirm')} ${getPreviousMonth()} ${t('expenses.to')} ${selectedMonth}? ${t('expenses.copy_note')}`}
+          confirmLabel={copyFromMonth.isPending ? t('expenses.copying') : t('expenses.copy')}
           onConfirm={() => copyFromMonth.mutate(getPreviousMonth())}
           onCancel={() => setShowCopyConfirm(false)}
           isLoading={copyFromMonth.isPending}
@@ -784,8 +785,9 @@ function SummaryCard({
 }
 
 function CategoryBadge({ category }: { category: Category }) {
+  const { t } = useTranslation()
   const colors = CATEGORY_COLORS[category] || CATEGORY_COLORS.other
-  const label = CATEGORY_LABELS[category] || category
+  const label = t(`expenses.${category}`)
   return (
     <span className={`text-xs font-medium px-2.5 py-1 rounded-full ${colors.bg} ${colors.text}`}>
       {label}
@@ -810,19 +812,20 @@ function ConfirmModal({
   isLoading?: boolean
   error?: string
 }) {
+  const { t } = useTranslation()
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onCancel} />
       <div className="relative card p-6 max-w-md w-full mx-4 shadow-2xl">
         <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">{title}</h3>
         <p className="text-sm text-gray-500 dark:text-neutral-400 mb-6">{message}</p>
-        {error && <p className="text-red-500 text-sm mb-4">Erro: {error}</p>}
+        {error && <p className="text-red-500 text-sm mb-4">{t('expenses.error')} {error}</p>}
         <div className="flex items-center justify-end gap-3">
           <button
             onClick={onCancel}
             className="px-4 py-2 text-sm text-gray-600 dark:text-neutral-400 hover:bg-gray-100 dark:hover:bg-neutral-800 rounded-xl transition-colors"
           >
-            Cancelar
+            {t('expenses.cancel')}
           </button>
           <button
             onClick={onConfirm}
