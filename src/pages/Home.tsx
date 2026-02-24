@@ -85,6 +85,7 @@ const ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIs
 export default function HomePage() {
   const { theme } = useTheme()
   const { t, lang } = useTranslation()
+  const queryClient = useQueryClient()
   const isDark = theme === 'dark'
   const [syncing, setSyncing] = useState(false)
   const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'done' | 'error'>('idle')
@@ -105,34 +106,55 @@ export default function HomePage() {
     'ytd': t('home.ytd'),
   }
 
+  // Sync with timeout per function (30s max) and sequential batches of 2
   const syncAll = async () => {
+    if (syncing) return
     setSyncing(true)
     setSyncStatus('syncing')
     setSyncProgress(0)
     let completed = 0
     let errors = 0
 
-    const promises = SYNC_FUNCTIONS.map(async (fn) => {
-      try {
-        await fetch(`${SUPABASE_URL}/functions/v1/${fn}`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${ANON_KEY}`,
-            'Content-Type': 'application/json',
-          },
-        })
-      } catch {
-        errors++
-      }
-      completed++
-      setSyncProgress(Math.round((completed / SYNC_FUNCTIONS.length) * 100))
-    })
+    const fetchWithTimeout = (fn: string) => {
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), 30000)
+      return fetch(`${SUPABASE_URL}/functions/v1/${fn}`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${ANON_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        signal: controller.signal,
+      }).finally(() => clearTimeout(timeout))
+    }
 
-    await Promise.all(promises)
+    // Run in batches of 2 to avoid overloading
+    for (let i = 0; i < SYNC_FUNCTIONS.length; i += 2) {
+      const batch = SYNC_FUNCTIONS.slice(i, i + 2)
+      await Promise.all(batch.map(async (fn) => {
+        try {
+          await fetchWithTimeout(fn)
+        } catch {
+          errors++
+        }
+        completed++
+        setSyncProgress(Math.round((completed / SYNC_FUNCTIONS.length) * 100))
+      }))
+    }
+
+    // Refresh all data after sync
+    queryClient.invalidateQueries()
     setSyncing(false)
     setSyncStatus(errors > 0 ? 'error' : 'done')
     setTimeout(() => setSyncStatus('idle'), 3000)
   }
+
+  // Auto-sync on mount + every 5 minutes
+  useEffect(() => {
+    syncAll()
+    const interval = setInterval(syncAll, 5 * 60 * 1000)
+    return () => clearInterval(interval)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Revenue transactions for selected period
   const { data: periodTransactions = [] } = useQuery({
