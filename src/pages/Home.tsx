@@ -78,7 +78,6 @@ const SYNC_FUNCTIONS = [
   'sync-ads',
   'sync-adsense',
   'sync-churn',
-  'sync-systeme',
 ]
 
 const SUPABASE_URL = 'https://jdodenbjohnqvhvldfqu.supabase.co'

@@ -199,26 +199,6 @@ export type Database = {
           updated_at: string
         }
       }
-      systeme_tags: {
-        Row: {
-          id: string
-          tag_id: number
-          name: string
-          contact_count: number
-          last_synced_at: string
-          created_at: string
-        }
-      }
-      systeme_contacts_daily: {
-        Row: {
-          id: string
-          date: string
-          total_contacts: number
-          new_contacts: number
-          tag_breakdown: Record<string, number>
-          created_at: string
-        }
-      }
       instagram_automations: {
         Row: {
           id: string

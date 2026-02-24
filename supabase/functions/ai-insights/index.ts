@@ -63,7 +63,6 @@ serve(async (req) => {
       expensesRes,
       okrsRes,
       transactionsRes,
-      systemeRes,
       knowledgeRes,
     ] = await Promise.all([
       supabase.from('financial_daily').select('*').gte('date', sinceDateStr).order('date', { ascending: true }),
@@ -76,7 +75,6 @@ serve(async (req) => {
       supabase.from('monthly_expenses').select('*').in('month', uniqueMonths),
       supabase.from('okrs').select('*'),
       supabase.from('revenue_transactions').select('date, source, amount, type, status').gte('date', sinceDateStr).order('date', { ascending: false }).limit(1000),
-      supabase.from('systeme_contacts_daily').select('*').order('date', { ascending: false }).limit(1),
       supabase.from('ai_knowledge_base').select('name, content').order('created_at', { ascending: true }),
     ])
 
@@ -92,7 +90,6 @@ serve(async (req) => {
       expenses: expensesRes.data || [],
       okrs: okrsRes.data || [],
       transactions: transactionsRes.data || [],
-      systeme: systemeRes.data?.[0] || null,
       periodLabel,
       daysBack,
     })
@@ -128,7 +125,8 @@ REGRAS:
 - Quando identificar oportunidades, explique como aproveita-las usando frameworks dos documentos
 - Use **negrito** para destacar numeros importantes e titulos de secao
 - Use listas numeradas (1. 2. 3.) e com marcadores (- item) para organizar informacoes
-- De respostas completas e detalhadas com todos os dados relevantes
+- Para panoramas gerais, seja RESUMIDO e direto ao ponto - maximo 5-8 bullet points com os numeros-chave. NAO escreva paragrafos longos
+- Para perguntas especificas, de respostas detalhadas mas ainda objetivas
 - IMPORTANTE: Todos os dados abaixo sao do PERIODO SELECIONADO pelo usuario (${periodLabel}). Baseie TODAS as suas analises nesses dados. NAO invente numeros.
 - NUNCA de conselhos genericos tipo "melhore o marketing" ou "reduza custos" sem especificar COMO baseado nos documentos
 
@@ -201,7 +199,6 @@ function buildBusinessContext(data: {
   expenses: Array<Record<string, unknown>>
   okrs: Array<Record<string, unknown>>
   transactions: Array<Record<string, unknown>>
-  systeme: Record<string, unknown> | null
   periodLabel: string
   daysBack: number
 }): string {
@@ -395,13 +392,6 @@ function buildBusinessContext(data: {
         : '0'
       parts.push(`- [${okr.category}] ${okr.title}: ${okr.current_value}/${okr.target_value} (${progress}%)`)
     }
-  }
-
-  // ===== SYSTEME.IO =====
-  if (data.systeme) {
-    parts.push(`\nSYSTEME.IO (Funil de Leads):
-- Total Contatos: ${data.systeme.total_contacts}
-- Novos Hoje: ${data.systeme.new_contacts}`)
   }
 
   return parts.join('\n')
