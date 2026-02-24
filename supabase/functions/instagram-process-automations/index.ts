@@ -175,8 +175,14 @@ serve(async (req) => {
               }
 
               if (dmData.error) {
-                errorMessage += `DM error: ${(dmData.error as Record<string, unknown>).message || JSON.stringify(dmData.error)}; `
-                status = actionTaken ? 'partial' : 'error'
+                const dmErr = dmData.error as Record<string, unknown>
+                // Instagram only allows 1 private reply per comment - treat as already sent
+                if (dmErr.error_subcode === 2534023) {
+                  actionTaken += actionTaken ? '+dm' : 'dm'
+                } else {
+                  errorMessage += `DM error: ${dmErr.message || JSON.stringify(dmErr)}; `
+                  status = actionTaken ? 'partial' : 'error'
+                }
               } else {
                 actionTaken += actionTaken ? '+dm' : 'dm'
               }
