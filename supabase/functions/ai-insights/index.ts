@@ -129,6 +129,7 @@ REGRAS:
 - Para perguntas especificas, de respostas detalhadas mas ainda objetivas
 - IMPORTANTE: Todos os dados abaixo sao do PERIODO SELECIONADO pelo usuario (${periodLabel}). Baseie TODAS as suas analises nesses dados. NAO invente numeros.
 - NUNCA de conselhos genericos tipo "melhore o marketing" ou "reduza custos" sem especificar COMO baseado nos documentos
+- REGRA FINANCEIRA CRITICA: Trabalhe SOMENTE com RECEITA LIQUIDA (receita total menos reembolsos). NUNCA mencione receita bruta. Quando falar de receita, margem, lucro, media diaria, etc, SEMPRE use a receita liquida como base. A receita liquida ja esta calculada nos dados abaixo.
 
 DADOS DO NEGOCIO (${periodLabel}):
 ${businessData}${knowledgeContext}`
@@ -220,12 +221,7 @@ function buildBusinessContext(data: {
     parts.push(`FINANCEIRO (${data.periodLabel}):
 - Dias no periodo: ${data.daysBack}
 - Total transacoes: ${data.transactions.length} (${paidTx.length} pagas, ${refundTx.length} reembolsadas)
-- Receita Stripe: R$ ${totalStripe.toFixed(2)}
-- Receita Kiwify: R$ ${totalKiwify.toFixed(2)}
-- Receita AdSense (YouTube): R$ ${totalAdsense.toFixed(2)}
-- Receita Total Bruta: R$ ${totalRevenue.toFixed(2)}
-- Reembolsos: R$ ${totalRefunds.toFixed(2)} (${refundPct}% da receita bruta)
-- Receita Liquida: R$ ${netRevenue.toFixed(2)}
+- Receita Liquida: R$ ${netRevenue.toFixed(2)} (Stripe: R$ ${totalStripe.toFixed(2)}, Kiwify: R$ ${totalKiwify.toFixed(2)}, AdSense: R$ ${totalAdsense.toFixed(2)}, Reembolsos: -R$ ${totalRefunds.toFixed(2)})
 - Media Diaria: R$ ${(netRevenue / (data.daysBack || 1)).toFixed(2)}`)
 
     // Breakdown by type
@@ -251,7 +247,7 @@ function buildBusinessContext(data: {
     }, 0)
     const proratedExpenses = totalDaysInMonths > 0 ? rawExpenses * (data.daysBack / totalDaysInMonths) : rawExpenses
     const profit = netRevenue - proratedExpenses
-    const marginPct = totalRevenue > 0 ? ((profit / totalRevenue) * 100).toFixed(1) : '0.0'
+    const marginPct = netRevenue > 0 ? ((profit / netRevenue) * 100).toFixed(1) : '0.0'
 
     // Group expenses by category
     const byCategory: Record<string, number> = {}
