@@ -97,7 +97,7 @@ const statusConfig: Record<string, { key: string; color: string; icon: any }> = 
   ACTIVE: { key: 'ads.active_label', color: 'bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300', icon: Target },
   PAUSED: { key: 'ads.paused_label', color: 'bg-yellow-100 dark:bg-yellow-500/20 text-yellow-700 dark:text-yellow-300', icon: Pause },
   DELETED: { key: 'ads.deleted_label', color: 'bg-red-100 dark:bg-red-500/20 text-red-700 dark:text-red-300', icon: Trash2 },
-  ARCHIVED: { key: 'ads.archived_label', color: 'bg-gray-100 dark:bg-neutral-700 text-gray-600 dark:text-neutral-400', icon: Archive },
+  ARCHIVED: { key: 'ads.archived_label', color: 'bg-gray-100 dark:bg-neutral-500/20 text-gray-600 dark:text-neutral-400', icon: Archive },
 }
 
 const CHART_COLORS = ['#8b5cf6', '#ec4899', '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#6366f1', '#14b8a6']
@@ -153,21 +153,6 @@ export default function AdsManagerPage() {
     },
   })
 
-  // Fetch revenue for ROAS
-  const thirtyDaysAgo = new Date()
-  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30)
-  const since30d = thirtyDaysAgo.toISOString().split('T')[0]
-
-  const { data: revenueTx = [] } = useQuery({
-    queryKey: ['ads-revenue-tx'],
-    queryFn: async () => {
-      const { data } = await supabase
-        .from('revenue_transactions')
-        .select('amount, status')
-        .gte('date', since30d)
-      return data || []
-    },
-  })
 
   // Sync ads
   const handleSync = async () => {
@@ -202,10 +187,9 @@ export default function AdsManagerPage() {
   const avgCpa = totalConversions > 0 ? totalSpend / totalConversions : 0
   const newCustomers = churnData?.new_customers || 0
   const cac = newCustomers > 0 ? totalSpend / newCustomers : 0
-  const totalRevenue = revenueTx
-    .filter((t: any) => t.status === 'paid' || t.status === 'approved')
-    .reduce((s: number, t: any) => s + Math.abs(t.amount), 0)
-  const roas = totalSpend > 0 ? totalRevenue / totalSpend : 0
+  const totalImpressions = campaigns.reduce((s, c) => s + c.impressions, 0)
+  const totalClicks = campaigns.reduce((s, c) => s + c.clicks, 0)
+  const avgCtr = totalImpressions > 0 ? (totalClicks / totalImpressions) * 100 : 0
 
   // Chart data
   const chartData = campaigns
@@ -293,7 +277,7 @@ export default function AdsManagerPage() {
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
         <KPICard icon={Wallet} label={t('ads.total_spend')} value={BRL(totalSpend)} accent="red" sub={t('ads.last_30_days')} />
         <KPICard icon={DollarSign} label={t('ads.cac')} value={cac > 0 ? BRL(cac) : '-'} accent="amber" sub={`${newCustomers} ${t('ads.new_clients')}`} />
-        <KPICard icon={TrendingUp} label={t('ads.roas')} value={roas > 0 ? `${roas.toFixed(1)}x` : '-'} accent={roas >= 2 ? 'emerald' : 'red'} sub={roas >= 2 ? t('ads.healthy') : t('ads.below_ideal')} />
+        <KPICard icon={TrendingUp} label={t('ads.avg_ctr')} value={avgCtr > 0 ? `${avgCtr.toFixed(2)}%` : '-'} accent={avgCtr >= 1 ? 'emerald' : 'amber'} sub={`${fmtNum(totalClicks)} clicks`} />
         <KPICard icon={Zap} label={t('ads.conversions')} value={fmtNum(totalConversions)} accent="blue" />
         <KPICard icon={Target} label={t('ads.active_label')} value={String(activeCampaigns)} accent="emerald" />
         <KPICard icon={Users} label={t('ads.avg_cpa')} value={avgCpa > 0 ? BRL(avgCpa) : '-'} accent="purple" />

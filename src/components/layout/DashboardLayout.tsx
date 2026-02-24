@@ -41,7 +41,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   const { toggleLang } = useLanguage()
   const { t, lang } = useTranslation()
   const navigate = useNavigate()
-  const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth >= 1024)
   const [upcomingMeetings, setUpcomingMeetings] = useState<UpcomingMeeting[]>([])
   const [bellOpen, setBellOpen] = useState(false)
   const [dropdownPos, setDropdownPos] = useState({ top: 0, right: 0 })
@@ -64,6 +64,15 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
       document.removeEventListener('click', handler)
     }
   }, [bellOpen])
+
+  // Auto-collapse sidebar on small screens
+  useEffect(() => {
+    const handleResize = () => {
+      if (window.innerWidth < 1024) setSidebarOpen(false)
+    }
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [])
 
   // Fetch meetings happening today or tomorrow
   useEffect(() => {
@@ -118,10 +127,18 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-neutral-950 transition-colors">
+      {/* Mobile overlay */}
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 bg-black/40 z-20 lg:hidden"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
       {/* Sidebar */}
       <aside
         className={`fixed left-0 top-0 h-full z-30 bg-white dark:bg-neutral-900 border-r border-gray-100 dark:border-neutral-800 transition-all duration-300 ${
-          sidebarOpen ? 'w-64' : 'w-20'
+          sidebarOpen ? 'w-64' : 'w-0 lg:w-20 overflow-hidden'
         }`}
       >
         {/* Logo + Collapse */}
@@ -224,19 +241,17 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
       </aside>
 
       {/* Main Content */}
-      <main className={`transition-all duration-300 ${sidebarOpen ? 'ml-64' : 'ml-20'}`}>
+      <main className={`transition-all duration-300 ${sidebarOpen ? 'lg:ml-64' : 'lg:ml-20'}`}>
         {/* Header */}
         <header className="h-16 bg-white dark:bg-neutral-900 border-b border-gray-100 dark:border-neutral-800 flex items-center justify-between px-6 sticky top-0 z-20">
           <div className="flex items-center gap-4">
-            {!sidebarOpen && (
-              <button
-                onClick={() => setSidebarOpen(true)}
-                className="p-2 hover:bg-gray-100 dark:hover:bg-neutral-800 rounded-xl transition-colors text-gray-500 dark:text-neutral-400"
-                title={t('nav.open_menu')}
-              >
-                <Menu size={20} />
-              </button>
-            )}
+            <button
+              onClick={() => setSidebarOpen(!sidebarOpen)}
+              className={`p-2 hover:bg-gray-100 dark:hover:bg-neutral-800 rounded-xl transition-colors text-gray-500 dark:text-neutral-400 ${sidebarOpen ? 'lg:hidden' : ''}`}
+              title={t('nav.open_menu')}
+            >
+              <Menu size={20} />
+            </button>
           </div>
 
           {/* Header right */}

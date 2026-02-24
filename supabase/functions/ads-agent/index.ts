@@ -70,9 +70,9 @@ Voce tem acesso a TODOS os dados de campanhas, metricas financeiras e configurac
 SEU PAPEL:
 - Analisar performance de cada campanha individualmente
 - Recomendar quais campanhas manter, pausar ou escalar
-- Sugerir orcamentos ideais baseado em ROAS e CPA
+- Sugerir orcamentos ideais baseado em CPA e CTR
 - Identificar oportunidades de melhoria (publico, creative, copy)
-- Calcular e explicar CAC, ROAS, CPA, LTV/CAC
+- Calcular e explicar CPA, CTR, CPC (NAO calcule ROAS pois nao temos atribuicao direta dos ads)
 - Propor estrategias de escala e novas campanhas
 
 REGRAS:
@@ -82,8 +82,8 @@ REGRAS:
 - Compare performance entre campanhas
 - Recomende acoes especificas (pausar X, aumentar budget de Y para Z)
 - Considere o target CPA de R$ ${targetCpa} e ROAS minimo de ${minRoas}x
-- Use formatacao simples (sem markdown complexo)
-- De respostas completas e detalhadas
+- FORMATACAO: Use APENAS texto puro. NAO use asteriscos, negritos (**), italicos (*), ou qualquer marcacao markdown. Use letras maiusculas para titulos e tracos (-) para listas. Exemplo: "CAMPANHA X" em vez de "**Campanha X**"
+- Seja conciso e direto. Maximo 8-10 bullet points por resposta
 
 DADOS DAS CAMPANHAS E NEGOCIO:
 ${businessData}`
@@ -201,17 +201,16 @@ function buildAdsContext(data: {
 
   // ── Financial Context ──────────────────────────────────────────────────────
   if (data.transactions.length > 0 || data.campaigns.length > 0) {
-    const totalRevenue = data.transactions.reduce((s, t) => s + (Number(t.amount) || 0), 0)
-    const newCustomers = data.churn ? Number(data.churn.new_customers) || 0 : 0
-    const totalAdSpend = data.campaigns.reduce((s, c) => s + (Number(c.spend) || 0), 0)
-    const cac = newCustomers > 0 ? totalAdSpend / newCustomers : 0
-    const roas = totalAdSpend > 0 ? totalRevenue / totalAdSpend : 0
+    const paidTx = data.transactions.filter(t => t.status === 'paid' || t.status === 'approved' || t.status === 'completed')
+    const refundTx = data.transactions.filter(t => t.status === 'refunded' || t.status === 'chargedback')
+    const totalRevenue = paidTx.reduce((s, t) => s + Math.abs(Number(t.amount) || 0), 0)
+    const totalRefunds = refundTx.reduce((s, t) => s + Math.abs(Number(t.amount) || 0), 0)
+    const netRevenue = totalRevenue - totalRefunds
 
     parts.push(`\nFINANCEIRO (30 dias):
-- Receita Total: R$ ${totalRevenue.toFixed(2)}
-- Novos Clientes: ${newCustomers}
-- CAC: R$ ${cac.toFixed(2)} (Gasto em Ads / Novos Clientes)
-- ROAS: ${roas.toFixed(2)}x (Receita / Gasto em Ads)`)
+- Receita Liquida: R$ ${netRevenue.toFixed(2)}
+- Reembolsos: R$ ${totalRefunds.toFixed(2)} (${refundTx.length} transacoes)
+- Nota: ROAS nao pode ser calculado sem atribuicao direta dos ads. Foque em CPA e CTR.`)
   }
 
   // ── Churn ──────────────────────────────────────────────────────────────────
