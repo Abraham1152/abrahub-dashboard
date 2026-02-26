@@ -31,6 +31,7 @@ type Task = {
   position: number
   done_at: string | null
   created_at: string
+  image_url: string | null
 }
 
 type Meeting = {
@@ -60,7 +61,9 @@ export default function KanbanPage() {
   const queryClient = useQueryClient()
   const { t, lang } = useTranslation()
   const [draggedTask, setDraggedTask] = useState<string | null>(null)
-  const [dragOverTarget, setDragOverTarget] = useState<string | null>(null)
+  const [dragOverColumn, setDragOverColumn] = useState<string | null>(null)
+  const [dragOverCard, setDragOverCard] = useState<string | null>(null)
+  const [dragInsertBefore, setDragInsertBefore] = useState<boolean>(true)
   const [editingTask, setEditingTask] = useState<Task | null>(null)
   const [viewingTask, setViewingTask] = useState<Task | null>(null)
   const [addingTo, setAddingTo] = useState<{ person: string; status: Status } | null>(null)
@@ -252,26 +255,71 @@ export default function KanbanPage() {
 
   const handleDragEnd = (e: DragEvent) => {
     setDraggedTask(null)
-    setDragOverTarget(null)
+    setDragOverColumn(null)
+    setDragOverCard(null)
     if (e.currentTarget instanceof HTMLElement) {
       e.currentTarget.style.opacity = '1'
     }
   }
 
-  const handleDragOver = (e: DragEvent, targetId: string) => {
+  // Column-level drag (empty area fallback)
+  const handleColumnDragOver = (e: DragEvent, columnId: string) => {
     e.preventDefault()
     e.dataTransfer.dropEffect = 'move'
-    setDragOverTarget(targetId)
+    setDragOverColumn(columnId)
+    setDragOverCard(null)
   }
 
-  const handleDrop = (e: DragEvent, person: string, status: Status) => {
+  // Card-level drag over — tracks which half (top/bottom) the pointer is on
+  const handleCardDragOver = (e: DragEvent, cardId: string) => {
     e.preventDefault()
-    setDragOverTarget(null)
+    e.stopPropagation()
+    e.dataTransfer.dropEffect = 'move'
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+    setDragOverCard(cardId)
+    setDragInsertBefore(e.clientY < rect.top + rect.height / 2)
+    setDragOverColumn(null)
+  }
+
+  // Drop on column empty area — places at end
+  const handleDropOnColumn = (e: DragEvent, person: string, status: Status) => {
+    e.preventDefault()
+    setDragOverColumn(null)
+    setDragOverCard(null)
     if (draggedTask) {
       const targetTasks = tasks.filter((t) => t.assigned_to === person && t.status === status)
       const maxPos = targetTasks.length > 0 ? Math.max(...targetTasks.map((t) => t.position)) + 1 : 0
       updateMutation.mutate({ id: draggedTask, assigned_to: person, status, position: maxPos })
     }
+  }
+
+  // Drop on a specific card — inserts before or after using fractional position
+  const handleDropOnCard = (e: DragEvent, targetCardId: string, person: string, status: Status) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setDragOverCard(null)
+    setDragOverColumn(null)
+    if (!draggedTask || draggedTask === targetCardId) return
+
+    const colTasks = tasks
+      .filter((t) => t.assigned_to === person && t.status === status && t.id !== draggedTask)
+      .sort((a, b) => a.position - b.position)
+
+    const targetIdx = colTasks.findIndex((t) => t.id === targetCardId)
+    if (targetIdx === -1) return
+
+    let newPosition: number
+    if (dragInsertBefore) {
+      newPosition = targetIdx === 0
+        ? colTasks[0].position - 1
+        : (colTasks[targetIdx - 1].position + colTasks[targetIdx].position) / 2
+    } else {
+      newPosition = targetIdx === colTasks.length - 1
+        ? colTasks[colTasks.length - 1].position + 1
+        : (colTasks[targetIdx].position + colTasks[targetIdx + 1].position) / 2
+    }
+
+    updateMutation.mutate({ id: draggedTask, assigned_to: person, status, position: newPosition })
   }
 
   const locale = lang === 'pt' ? 'pt-BR' : 'en-US'
@@ -332,19 +380,19 @@ export default function KanbanPage() {
                     .filter((t) => t.status === block.key)
                     .sort((a, b) => a.position - b.position)
                   const dropId = `${member.name}::${block.key}`
-                  const isOver = dragOverTarget === dropId
+                  const isColOver = dragOverColumn === dropId
 
                   return (
                     <div
                       key={block.key}
                       className={`rounded-xl p-2.5 min-h-[80px] transition-all ${
-                        isOver
+                        isColOver
                           ? 'bg-blue-50 dark:bg-blue-500/5 ring-2 ring-blue-400/30'
                           : 'bg-gray-100/70 dark:bg-neutral-900/50'
                       }`}
-                      onDragOver={(e) => handleDragOver(e, dropId)}
-                      onDragLeave={() => setDragOverTarget(null)}
-                      onDrop={(e) => handleDrop(e, member.name, block.key)}
+                      onDragOver={(e) => handleColumnDragOver(e, dropId)}
+                      onDragLeave={() => setDragOverColumn(null)}
+                      onDrop={(e) => handleDropOnColumn(e, member.name, block.key)}
                     >
                       {/* Block Header */}
                       <div className="flex items-center justify-between mb-2 px-0.5">
@@ -379,26 +427,39 @@ export default function KanbanPage() {
 
                       {/* Task Cards */}
                       <div className="space-y-1.5">
-                        {blockTasks.map((task, idx) => (
-                          <TaskCard
-                            key={task.id}
-                            task={task}
-                            priorityStyles={PRIORITY_STYLES}
-                            locale={locale}
-                            onDragStart={handleDragStart}
-                            onDragEnd={handleDragEnd}
-                            onEdit={() => setEditingTask(task)}
-                            onView={() => setViewingTask(task)}
-                            onDelete={() => deleteMutation.mutate(task.id)}
-                            onCyclePriority={() => {
-                              const cycle: Record<string, string> = { low: 'medium', medium: 'high', high: 'low' }
-                              updateMutation.mutate({ id: task.id, priority: cycle[task.priority] as Task['priority'] })
-                            }}
-                            onMoveUp={idx > 0 ? () => handleReorder(task, 'up') : undefined}
-                            onMoveDown={idx < blockTasks.length - 1 ? () => handleReorder(task, 'down') : undefined}
-                            isDragging={draggedTask === task.id}
-                          />
-                        ))}
+                        {blockTasks.map((task, idx) => {
+                          const isDropTarget = dragOverCard === task.id && draggedTask !== task.id
+                          return (
+                            <div key={task.id}>
+                              {isDropTarget && dragInsertBefore && (
+                                <div className="h-8 mb-1.5 rounded-lg border-2 border-dashed border-blue-400/50 bg-blue-50/30 dark:bg-blue-500/5 transition-all duration-100" />
+                              )}
+                              <TaskCard
+                                task={task}
+                                priorityStyles={PRIORITY_STYLES}
+                                locale={locale}
+                                onDragStart={handleDragStart}
+                                onDragEnd={handleDragEnd}
+                                onCardDragOver={(e) => handleCardDragOver(e, task.id)}
+                                onCardDrop={(e) => handleDropOnCard(e, task.id, member.name, block.key)}
+                                onEdit={() => setEditingTask(task)}
+                                onView={() => setViewingTask(task)}
+                                onDelete={() => deleteMutation.mutate(task.id)}
+                                onCyclePriority={() => {
+                                  const cycle: Record<string, string> = { low: 'medium', medium: 'high', high: 'low' }
+                                  updateMutation.mutate({ id: task.id, priority: cycle[task.priority] as Task['priority'] })
+                                }}
+                                onMoveUp={idx > 0 ? () => handleReorder(task, 'up') : undefined}
+                                onMoveDown={idx < blockTasks.length - 1 ? () => handleReorder(task, 'down') : undefined}
+                                isDragging={draggedTask === task.id}
+                                onSaveImage={(imageUrl) => updateMutation.mutate({ id: task.id, image_url: imageUrl })}
+                              />
+                              {isDropTarget && !dragInsertBefore && (
+                                <div className="h-8 mt-1.5 rounded-lg border-2 border-dashed border-blue-400/50 bg-blue-50/30 dark:bg-blue-500/5 transition-all duration-100" />
+                              )}
+                            </div>
+                          )
+                        })}
                       </div>
                     </div>
                   )
@@ -462,6 +523,8 @@ function TaskCard({
   locale,
   onDragStart,
   onDragEnd,
+  onCardDragOver,
+  onCardDrop,
   onEdit,
   onView,
   onDelete,
@@ -469,12 +532,15 @@ function TaskCard({
   onMoveUp,
   onMoveDown,
   isDragging,
+  onSaveImage,
 }: {
   task: Task
   priorityStyles: Record<string, { label: string; bar: string; badge: string }>
   locale: string
   onDragStart: (e: DragEvent, id: string) => void
   onDragEnd: (e: DragEvent) => void
+  onCardDragOver: (e: DragEvent) => void
+  onCardDrop: (e: DragEvent) => void
   onEdit: () => void
   onView: () => void
   onDelete: () => void
@@ -482,14 +548,54 @@ function TaskCard({
   onMoveUp?: () => void
   onMoveDown?: () => void
   isDragging: boolean
+  onSaveImage: (imageUrl: string | null) => void
 }) {
   const priority = priorityStyles[task.priority]
+
+  const processImageFile = (file: File, cb: (dataUrl: string) => void) => {
+    const reader = new FileReader()
+    reader.onload = (ev) => {
+      const img = new window.Image()
+      img.onload = () => {
+        const canvas = document.createElement('canvas')
+        const MAX = 900
+        const ratio = Math.min(1, MAX / Math.max(img.width, img.height))
+        canvas.width = img.width * ratio
+        canvas.height = img.height * ratio
+        canvas.getContext('2d')!.drawImage(img, 0, 0, canvas.width, canvas.height)
+        cb(canvas.toDataURL('image/jpeg', 0.75))
+      }
+      img.src = ev.target?.result as string
+    }
+    reader.readAsDataURL(file)
+  }
+
+  const handleFileDrop = (e: DragEvent) => {
+    // Only handle file drops (images), not card reorder drops
+    const file = e.dataTransfer?.files?.[0]
+    if (file && file.type.startsWith('image/')) {
+      e.preventDefault()
+      e.stopPropagation()
+      processImageFile(file, onSaveImage)
+    }
+    // If no image file, let the card drop handler proceed (card reorder)
+  }
 
   return (
     <div
       draggable
       onDragStart={(e) => onDragStart(e, task.id)}
       onDragEnd={onDragEnd}
+      onDragOver={onCardDragOver}
+      onDrop={(e) => {
+        // If dropping an image file, handle it; otherwise do card reorder
+        const file = e.dataTransfer?.files?.[0]
+        if (file && file.type.startsWith('image/')) {
+          handleFileDrop(e)
+        } else {
+          onCardDrop(e)
+        }
+      }}
       className={`bg-white dark:bg-neutral-900 rounded-lg p-2.5 border border-gray-200/80 dark:border-neutral-800 shadow-sm hover:shadow cursor-grab active:cursor-grabbing transition-all group ${
         isDragging ? 'opacity-40 scale-95' : ''
       }`}
@@ -549,7 +655,26 @@ function TaskCard({
             {new Date(task.due_date + 'T00:00:00').toLocaleDateString(locale, { day: '2-digit', month: 'short' })}
           </span>
         )}
+        {task.image_url && (
+          <span className="ml-auto flex items-center gap-0.5 text-[9px] text-gray-400 dark:text-neutral-500" title="Tem imagem">
+            <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+          </span>
+        )}
       </div>
+
+      {/* Image thumbnail */}
+      {task.image_url && (
+        <div
+          className="mt-2 ml-4 cursor-pointer"
+          onClick={(e) => { e.stopPropagation(); onView() }}
+        >
+          <img
+            src={task.image_url}
+            alt=""
+            className="w-full max-h-24 object-cover rounded-md border border-gray-200 dark:border-neutral-700"
+          />
+        </div>
+      )}
     </div>
   )
 }
@@ -633,6 +758,20 @@ function TaskDetailModal({
               <span>{new Date(task.due_date + 'T00:00:00').toLocaleDateString(locale, { weekday: 'short', day: '2-digit', month: 'long', year: 'numeric' })}</span>
             </div>
           )}
+
+          {/* Image */}
+          {task.image_url && (
+            <div>
+              <p className="text-xs font-medium text-gray-500 dark:text-neutral-500 uppercase tracking-wider mb-2">Imagem</p>
+              <a href={task.image_url} target="_blank" rel="noopener noreferrer">
+                <img
+                  src={task.image_url}
+                  alt=""
+                  className="w-full rounded-xl border border-gray-200 dark:border-neutral-700 object-contain max-h-72 hover:opacity-90 transition-opacity"
+                />
+              </a>
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -709,6 +848,42 @@ function EditTaskModal({
   const [assignee, setAssignee] = useState(task.assigned_to || '')
   const [dueDate, setDueDate] = useState(task.due_date || '')
   const [status, setStatus] = useState(task.status)
+  const [imagePreview, setImagePreview] = useState<string | null>(task.image_url || null)
+  const [imgDragActive, setImgDragActive] = useState(false)
+
+  const processImageFile = (file: File) => {
+    const reader = new FileReader()
+    reader.onload = (ev) => {
+      const img = new window.Image()
+      img.onload = () => {
+        const canvas = document.createElement('canvas')
+        const MAX = 900
+        const ratio = Math.min(1, MAX / Math.max(img.width, img.height))
+        canvas.width = img.width * ratio
+        canvas.height = img.height * ratio
+        canvas.getContext('2d')!.drawImage(img, 0, 0, canvas.width, canvas.height)
+        setImagePreview(canvas.toDataURL('image/jpeg', 0.75))
+      }
+      img.src = ev.target?.result as string
+    }
+    reader.readAsDataURL(file)
+  }
+
+  // Ctrl+V paste
+  useEffect(() => {
+    const handlePaste = (e: ClipboardEvent) => {
+      const items = e.clipboardData?.items
+      if (!items) return
+      for (const item of Array.from(items)) {
+        if (item.type.startsWith('image/')) {
+          const file = item.getAsFile()
+          if (file) { processImageFile(file); break }
+        }
+      }
+    }
+    document.addEventListener('paste', handlePaste)
+    return () => document.removeEventListener('paste', handlePaste)
+  }, [])
 
   const handleSave = () => {
     onSave({
@@ -718,6 +893,7 @@ function EditTaskModal({
       assigned_to: assignee || null,
       due_date: dueDate || null,
       status,
+      image_url: imagePreview || null,
     })
   }
 
@@ -785,6 +961,57 @@ function EditTaskModal({
                 <option value="high">{t('kanban.high')}</option>
               </select>
             </div>
+          </div>
+
+          {/* Image upload zone */}
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="text-xs font-medium text-gray-500 dark:text-neutral-500 uppercase tracking-wider">Imagem</label>
+              {imagePreview && (
+                <button
+                  type="button"
+                  onClick={() => setImagePreview(null)}
+                  className="text-[10px] text-red-400 hover:text-red-600 transition-colors"
+                >
+                  Remover
+                </button>
+              )}
+            </div>
+            {imagePreview ? (
+              <img
+                src={imagePreview}
+                alt=""
+                className="w-full rounded-xl border border-gray-200 dark:border-neutral-700 object-contain max-h-48"
+              />
+            ) : (
+              <div
+                className={`relative flex flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed p-4 text-center transition-colors cursor-pointer ${
+                  imgDragActive
+                    ? 'border-blue-400 bg-blue-50/40 dark:bg-blue-500/5'
+                    : 'border-gray-200 dark:border-neutral-700 hover:border-gray-300 dark:hover:border-neutral-600'
+                }`}
+                onDragOver={(e) => { e.preventDefault(); setImgDragActive(true) }}
+                onDragLeave={() => setImgDragActive(false)}
+                onDrop={(e) => {
+                  e.preventDefault()
+                  setImgDragActive(false)
+                  const file = e.dataTransfer.files[0]
+                  if (file && file.type.startsWith('image/')) processImageFile(file)
+                }}
+                onClick={() => {
+                  const input = document.createElement('input')
+                  input.type = 'file'
+                  input.accept = 'image/*'
+                  input.onchange = () => { if (input.files?.[0]) processImageFile(input.files[0]) }
+                  input.click()
+                }}
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="text-gray-300 dark:text-neutral-600"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+                <p className="text-[11px] text-gray-400 dark:text-neutral-500">
+                  Arraste, cole <kbd className="font-mono bg-gray-100 dark:bg-neutral-800 px-1 rounded text-[10px]">Ctrl+V</kbd> ou clique
+                </p>
+              </div>
+            )}
           </div>
 
           <div className="grid grid-cols-2 gap-3">
