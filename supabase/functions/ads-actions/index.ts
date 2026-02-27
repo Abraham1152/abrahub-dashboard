@@ -493,7 +493,8 @@ async function handleCreateFromUpload(
   body: Record<string, unknown>,
   source: string,
 ): Promise<Response> {
-  const imageBase64 = body.image_base64 as string
+  const imageBase64 = body.image_base64 as string | undefined
+  const videoUrl = body.video_url as string | undefined
   const imageName = (body.image_name as string) || 'ad_image.jpg'
   const adMessage = (body.ad_message as string) || ''
   const destinationUrl = body.destination_url as string
@@ -502,23 +503,40 @@ async function handleCreateFromUpload(
   const targeting = body.targeting as Record<string, unknown>
   const ctaType = (body.cta_type as string) || 'LEARN_MORE'
 
-  if (!imageBase64) return jsonResponse({ error: 'image_base64 is required' }, 400)
+  if (!imageBase64 && !videoUrl) return jsonResponse({ error: 'image_base64 or video_url is required' }, 400)
   if (!destinationUrl) return jsonResponse({ error: 'destination_url is required' }, 400)
   if (!campaignName) return jsonResponse({ error: 'campaign_name is required' }, 400)
   if (!dailyBudget || dailyBudget <= 0) return jsonResponse({ error: 'daily_budget must be positive' }, 400)
 
-  // Step 1: Upload image to Meta Ad Images
-  await rateLimit()
-  const uploadResult = await metaPost(`${accountRef}/adimages`, {
-    bytes: imageBase64,
-    name: imageName,
-  }, accessToken)
+  const isVideo = !!videoUrl
 
-  // Meta returns: { images: { "filename": { hash: "...", url: "..." } } }
-  const imagesMap = uploadResult.images as Record<string, { hash: string }>
-  const imageHash = imagesMap?.[imageName]?.hash
-  if (!imageHash) {
-    return jsonResponse({ error: 'Failed to upload image to Meta. Check image format and size (max 30MB, JPG/PNG).' }, 400)
+  // Step 1: Upload creative to Meta
+  await rateLimit()
+  let imageHash: string | undefined
+  let videoId: string | undefined
+
+  if (isVideo) {
+    // Upload video via file_url — Meta fetches from our Supabase Storage URL
+    const videoResult = await metaPost(`${accountRef}/advideos`, {
+      file_url: videoUrl,
+      title: imageName,
+    }, accessToken)
+    videoId = videoResult.id as string
+    if (!videoId) {
+      return jsonResponse({ error: 'Failed to upload video to Meta. Check video format (MP4/MOV, max 4GB).' }, 400)
+    }
+  } else {
+    // Upload image via base64
+    const uploadResult = await metaPost(`${accountRef}/adimages`, {
+      bytes: imageBase64,
+      name: imageName,
+    }, accessToken)
+    // Meta returns: { images: { "filename": { hash: "...", url: "..." } } }
+    const imagesMap = uploadResult.images as Record<string, { hash: string }>
+    imageHash = imagesMap?.[imageName]?.hash
+    if (!imageHash) {
+      return jsonResponse({ error: 'Failed to upload image to Meta. Check image format and size (max 30MB, JPG/PNG).' }, 400)
+    }
   }
 
   // Step 2: Create Campaign
@@ -560,24 +578,38 @@ async function handleCreateFromUpload(
     adset_id: adsetId, daily_budget: dailyBudget,
   }, source)
 
-  // Step 4: Create Ad Creative (image ad with object_story_spec)
+  // Step 4: Create Ad Creative (image or video ad with object_story_spec)
   await rateLimit()
+  const storySpec = isVideo
+    ? {
+        page_id: PAGE_ID,
+        video_data: {
+          video_id: videoId,
+          title: campaignName,
+          message: adMessage,
+          call_to_action: { type: ctaType, value: { link: destinationUrl } },
+        },
+      }
+    : {
+        page_id: PAGE_ID,
+        link_data: {
+          image_hash: imageHash,
+          link: destinationUrl,
+          message: adMessage,
+          call_to_action: { type: ctaType, value: { link: destinationUrl } },
+        },
+      }
+
   const creativeResult = await metaPost(`${accountRef}/adcreatives`, {
     name: `${campaignName} - Creative`,
-    object_story_spec: JSON.stringify({
-      page_id: PAGE_ID,
-      link_data: {
-        image_hash: imageHash,
-        link: destinationUrl,
-        message: adMessage,
-        call_to_action: { type: ctaType, value: { link: destinationUrl } },
-      },
-    }),
+    object_story_spec: JSON.stringify(storySpec),
   }, accessToken)
   const creativeId = creativeResult.id as string
 
   await logAction(supabase, 'create_ad_creative', campaignId, 'success', {
-    creative_id: creativeId, image_hash: imageHash, cta_type: ctaType,
+    creative_id: creativeId,
+    ...(isVideo ? { video_id: videoId } : { image_hash: imageHash }),
+    cta_type: ctaType,
   }, source)
 
   // Step 5: Create Ad
@@ -600,7 +632,7 @@ async function handleCreateFromUpload(
     adset_id: adsetId,
     creative_id: creativeId,
     ad_id: adId,
-    image_hash: imageHash,
+    ...(isVideo ? { video_id: videoId } : { image_hash: imageHash }),
     status: 'PAUSED',
   })
 }

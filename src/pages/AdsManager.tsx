@@ -122,7 +122,7 @@ interface NormalizedCampaign {
   platform: 'meta' | 'google'
 }
 
-type Platform = 'all' | 'meta' | 'google'
+type Platform = 'meta' | 'google'
 type SortField = 'spend' | 'impressions' | 'clicks' | 'ctr' | 'name' | 'cpa' | 'conversions'
 type SortDir = 'asc' | 'desc'
 
@@ -228,7 +228,7 @@ export default function AdsManagerPage() {
   const [showConfig, setShowConfig] = useState(false)
   const [showCreator, setShowCreator] = useState(false)
   const [showGoogleSetup, setShowGoogleSetup] = useState(false)
-  const [platform, setPlatform] = useState<Platform>('all')
+  const [platform, setPlatform] = useState<Platform>('meta')
 
   // Fetch Meta campaigns
   const { data: metaCampaigns = [], isLoading: loadingMeta } = useQuery({
@@ -282,30 +282,20 @@ export default function AdsManagerPage() {
 
   const isLoading = loadingMeta && loadingGoogle
 
-  // Normalize all campaigns
-  const allNormalized: NormalizedCampaign[] = [
-    ...(platform === 'google' ? [] : metaCampaigns.map(normalizeMetaCampaign)),
-    ...(platform === 'meta' ? [] : googleCampaigns.map(normalizeGoogleCampaign)),
-  ]
+  // Normalize campaigns for active platform
+  const allNormalized: NormalizedCampaign[] = platform === 'meta'
+    ? metaCampaigns.map(normalizeMetaCampaign)
+    : googleCampaigns.map(normalizeGoogleCampaign)
 
   // Sync ads
   const handleSync = async () => {
     setSyncing(true)
     try {
-      const syncs: Promise<any>[] = []
-      if (platform !== 'google') {
-        syncs.push(fetch(`${SUPABASE_URL}/functions/v1/sync-ads`, {
-          method: 'POST',
-          headers: { 'Authorization': `Bearer ${ANON_KEY}` },
-        }))
-      }
-      if (platform !== 'meta') {
-        syncs.push(fetch(`${SUPABASE_URL}/functions/v1/sync-google-ads`, {
-          method: 'POST',
-          headers: { 'Authorization': `Bearer ${ANON_KEY}` },
-        }))
-      }
-      await Promise.all(syncs)
+      const fn = platform === 'meta' ? 'sync-ads' : 'sync-google-ads'
+      await fetch(`${SUPABASE_URL}/functions/v1/${fn}`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${ANON_KEY}` },
+      })
       queryClient.invalidateQueries({ queryKey: ['ads-campaigns'] })
       queryClient.invalidateQueries({ queryKey: ['google-ads-campaigns'] })
       queryClient.invalidateQueries({ queryKey: ['ads-agent-actions'] })
@@ -414,7 +404,7 @@ export default function AdsManagerPage() {
 
       {/* Platform Tabs */}
       <div className="flex items-center gap-1 bg-white dark:bg-neutral-900 border border-gray-200 dark:border-neutral-800 rounded-xl p-1 w-fit">
-        {(['all', 'meta', 'google'] as Platform[]).map((p) => (
+        {(['meta', 'google'] as Platform[]).map((p) => (
           <button
             key={p}
             onClick={() => { setPlatform(p); setShowCreator(false); setShowGoogleSetup(false) }}
@@ -578,10 +568,7 @@ function PendingApprovalCards({ platform }: { platform: Platform }) {
     refetchInterval: 30000,
   })
 
-  const filtered = pendingActions.filter(a => {
-    if (platform === 'all') return true
-    return (a.platform || 'meta') === platform
-  })
+  const filtered = pendingActions.filter(a => (a.platform || 'meta') === platform)
 
   if (filtered.length === 0) return null
 
@@ -1131,10 +1118,7 @@ function ActionHistory({ platform }: { platform: Platform }) {
     },
   })
 
-  const actions = allActions.filter((a: any) => {
-    if (platform === 'all') return true
-    return (a.platform || 'meta') === platform
-  }).slice(0, 30)
+  const actions = allActions.filter((a: any) => (a.platform || 'meta') === platform).slice(0, 30)
 
   const actionIcons: Record<string, { icon: any; color: string }> = {
     pause_campaign: { icon: Pause, color: 'text-amber-500 bg-amber-50 dark:bg-amber-500/10' },
@@ -1455,15 +1439,23 @@ function AdCreatorWizard({ onClose, queryClient }: { onClose: () => void; queryC
     const file = e.target.files?.[0]
     if (!file) return
     setUploadFile(file)
-    const reader = new FileReader()
-    reader.onload = ev => {
-      const dataUrl = ev.target?.result as string
-      setUploadPreview(dataUrl)
-      // Strip "data:image/...;base64," prefix — Meta wants raw base64
-      setUploadBase64(dataUrl.split(',')[1])
+    setUploadBase64(null) // reset — videos don't use base64
+    if (file.type.startsWith('video/')) {
+      // For video: just show a preview placeholder (can't ObjectURL easily without cleanup)
+      setUploadPreview(null)
+    } else {
+      const reader = new FileReader()
+      reader.onload = ev => {
+        const dataUrl = ev.target?.result as string
+        setUploadPreview(dataUrl)
+        // Strip "data:image/...;base64," prefix — Meta wants raw base64
+        setUploadBase64(dataUrl.split(',')[1])
+      }
+      reader.readAsDataURL(file)
     }
-    reader.readAsDataURL(file)
   }
+
+  const isVideoFile = (file: File | null) => file?.type.startsWith('video/') ?? false
 
   const generateStrategy = async () => {
     setLoadingStrategy(true)
@@ -1503,11 +1495,27 @@ function AdCreatorWizard({ onClose, queryClient }: { onClose: () => void; queryC
 
   const launchCampaign = async () => {
     if (creatorMode === 'instagram' && !selectedPost) return
-    if (creatorMode === 'upload' && !uploadBase64) return
+    if (creatorMode === 'upload' && !uploadFile) return
     if (!strategy) return
     setLaunching(true)
     setError(null)
     try {
+      // For video uploads: upload to Supabase Storage first to get a public URL
+      let videoUrl: string | null = null
+      if (creatorMode === 'upload' && uploadFile && isVideoFile(uploadFile)) {
+        const fileName = `${Date.now()}-${uploadFile.name}`
+        const { error: storageError } = await supabase.storage
+          .from('ad-uploads')
+          .upload(fileName, uploadFile, { contentType: uploadFile.type, upsert: false })
+        if (storageError) {
+          setError(`Erro no upload do vídeo: ${storageError.message}`)
+          setLaunching(false)
+          return
+        }
+        const { data: urlData } = supabase.storage.from('ad-uploads').getPublicUrl(fileName)
+        videoUrl = urlData.publicUrl
+      }
+
       // Resolve interest IDs
       const interestRes = await adsAction('/search-interests', 'POST', {
         keywords: strategy.interests,
@@ -1533,7 +1541,9 @@ function AdCreatorWizard({ onClose, queryClient }: { onClose: () => void; queryC
       const isUpload = creatorMode === 'upload'
       const createRes = await adsAction(isUpload ? '/create-from-upload' : '/create-from-post', 'POST', {
         ...(isUpload
-          ? { image_base64: uploadBase64, image_name: uploadFile?.name || 'ad.jpg', ad_message: adCaption }
+          ? videoUrl
+            ? { video_url: videoUrl, image_name: uploadFile?.name || 'ad.mp4', ad_message: adCaption }
+            : { image_base64: uploadBase64, image_name: uploadFile?.name || 'ad.jpg', ad_message: adCaption }
           : { ig_media_id: selectedPost!.media_id }),
         destination_url: destinationUrl,
         campaign_name: editName,
@@ -1695,14 +1705,27 @@ function AdCreatorWizard({ onClose, queryClient }: { onClose: () => void; queryC
               <div
                 onClick={() => fileInputRef.current?.click()}
                 className={`relative flex flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed cursor-pointer transition-all ${
-                  uploadPreview
+                  uploadFile
                     ? 'border-purple-400 dark:border-purple-600 p-2'
                     : 'border-gray-300 dark:border-neutral-700 hover:border-purple-400 dark:hover:border-purple-600 py-10'
                 }`}
               >
-                {uploadPreview ? (
+                {uploadFile ? (
                   <div className="relative w-full">
-                    <img src={uploadPreview} alt={t('ads.upload_preview')} className="w-full max-h-52 object-contain rounded-lg" />
+                    {uploadPreview ? (
+                      <img src={uploadPreview} alt={t('ads.upload_preview')} className="w-full max-h-52 object-contain rounded-lg" />
+                    ) : (
+                      // Video — show filename + play icon
+                      <div className="flex items-center gap-3 p-4 rounded-lg bg-purple-50 dark:bg-purple-500/10">
+                        <div className="w-10 h-10 rounded-lg bg-purple-100 dark:bg-purple-500/20 flex items-center justify-center shrink-0">
+                          <Play size={18} className="text-purple-600 dark:text-purple-400 ml-0.5" />
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-purple-800 dark:text-purple-300 truncate">{uploadFile.name}</p>
+                          <p className="text-xs text-purple-500 dark:text-purple-400">{(uploadFile.size / 1024 / 1024).toFixed(1)} MB · {t('ads.upload_video_ready')}</p>
+                        </div>
+                      </div>
+                    )}
                     <button
                       onClick={e => { e.stopPropagation(); setUploadFile(null); setUploadPreview(null); setUploadBase64(null) }}
                       className="absolute top-1 right-1 p-1 rounded-full bg-black/50 text-white hover:bg-black/70"
@@ -1716,15 +1739,15 @@ function AdCreatorWizard({ onClose, queryClient }: { onClose: () => void; queryC
                       <Image size={24} className="text-purple-500" />
                     </div>
                     <div className="text-center">
-                      <p className="text-sm font-medium text-gray-700 dark:text-neutral-300">{t('ads.upload_image')}</p>
-                      <p className="text-xs text-gray-400 dark:text-neutral-500 mt-0.5">{t('ads.upload_image_hint')}</p>
+                      <p className="text-sm font-medium text-gray-700 dark:text-neutral-300">{t('ads.upload_file')}</p>
+                      <p className="text-xs text-gray-400 dark:text-neutral-500 mt-0.5">{t('ads.upload_file_hint')}</p>
                     </div>
                   </>
                 )}
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept="image/jpeg,image/png,image/gif"
+                  accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/quicktime,video/avi,video/mov"
                   onChange={handleFileChange}
                   className="hidden"
                 />
@@ -1747,7 +1770,7 @@ function AdCreatorWizard({ onClose, queryClient }: { onClose: () => void; queryC
           <div className="flex justify-end mt-4">
             <button
               onClick={() => setStep(2)}
-              disabled={creatorMode === 'instagram' ? !selectedPost : !uploadBase64}
+              disabled={creatorMode === 'instagram' ? !selectedPost : !uploadFile}
               className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-sm font-medium bg-purple-600 text-white hover:bg-purple-700 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
             >
               {t('ads.step_destination')} <ChevronRight size={15} />
@@ -1771,12 +1794,18 @@ function AdCreatorWizard({ onClose, queryClient }: { onClose: () => void; queryC
               </div>
             </div>
           )}
-          {creatorMode === 'upload' && uploadPreview && (
+          {creatorMode === 'upload' && uploadFile && (
             <div className="flex items-start gap-3 mb-4 p-3 rounded-xl bg-gray-50 dark:bg-neutral-800/50">
-              <img src={uploadPreview} alt={t('ads.upload_preview')} className="w-16 h-16 object-cover rounded-lg shrink-0" />
+              {uploadPreview ? (
+                <img src={uploadPreview} alt={t('ads.upload_preview')} className="w-16 h-16 object-cover rounded-lg shrink-0" />
+              ) : (
+                <div className="w-16 h-16 rounded-lg bg-purple-100 dark:bg-purple-500/20 flex items-center justify-center shrink-0">
+                  <Play size={20} className="text-purple-600 dark:text-purple-400 ml-0.5" />
+                </div>
+              )}
               <div>
                 <p className="text-xs font-medium text-gray-700 dark:text-neutral-300">{t('ads.creator_mode_upload')}</p>
-                <p className="text-[11px] text-gray-500 dark:text-neutral-400 mt-0.5">{uploadFile?.name}</p>
+                <p className="text-[11px] text-gray-500 dark:text-neutral-400 mt-0.5">{uploadFile.name}</p>
                 {adCaption && <p className="text-[11px] text-gray-400 dark:text-neutral-500 line-clamp-2 mt-0.5">{adCaption.substring(0, 100)}</p>}
               </div>
             </div>
