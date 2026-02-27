@@ -295,15 +295,19 @@ async function handleAiStrategy(
   const postType = body.post_type as string || 'IMAGE'
   const postEngagement = body.post_engagement as Record<string, unknown> || {}
 
-  const [campaignsRes, configRes, dailyRes] = await Promise.all([
+  const [campaignsRes, configRes, dailyRes, kbRes, churnRes] = await Promise.all([
     supabase.from('ads_campaigns').select('*').order('spend', { ascending: false }).limit(10),
     supabase.from('ads_optimization_config').select('*').single(),
     supabase.from('ads_daily').select('*').order('date', { ascending: false }).limit(30),
+    supabase.from('ai_knowledge_base').select('title, content').in('category', ['ads', 'strategy', 'audience', 'budget', 'creative']).limit(6),
+    supabase.from('churn_metrics').select('*').order('date', { ascending: false }).limit(1).single(),
   ])
 
   const campaigns = campaignsRes.data || []
   const config = configRes.data || null
   const dailyData = dailyRes.data || []
+  const knowledgeDocs = kbRes.data || []
+  const churn = churnRes.data || null
 
   const topCampaigns = campaigns
     .filter((c: Record<string, unknown>) => (c.spend as number) > 0)
@@ -314,28 +318,41 @@ async function handleAiStrategy(
   const totalConv30d = dailyData.reduce((s: number, d: Record<string, unknown>) => s + ((d.total_conversions as number) || 0), 0)
   const avgCpa30d = totalConv30d > 0 ? totalSpend30d / totalConv30d : 0
 
+  // Summarize knowledge base — truncate to keep prompt manageable
+  const kbContext = knowledgeDocs.length > 0
+    ? knowledgeDocs.map((doc: Record<string, unknown>) =>
+        `[${doc.title}]\n${(doc.content as string).substring(0, 800)}`
+      ).join('\n\n')
+    : 'Nenhum documento de estrategia disponivel.'
+
   const systemPrompt = `Voce e o Estrategista de Trafego Pago da ABRAhub Studio.
 
 Sua tarefa: analisar um post do Instagram que sera usado como creative de um anuncio Meta Ads e sugerir a melhor estrategia de campanha.
 
-CONTEXTO DA CONTA:
-- Objetivo: OUTCOME_TRAFFIC com otimizacao LINK_CLICKS (sem pixel)
-- Pais: Brasil
-- Plataformas: Facebook + Instagram
-- Target CPA configurado: R$${config?.target_cpa ?? 'nao definido'}
+ESTRATEGIA E CONHECIMENTO DA EMPRESA:
+${kbContext}
+
+---
+
+DADOS DE PERFORMANCE (ultimos 30 dias):
+- CPA medio: R$${avgCpa30d.toFixed(2)}
+- Gasto total: R$${totalSpend30d.toFixed(2)}
+- Conversoes: ${totalConv30d}
+- Novos clientes recentes: ${churn?.new_customers ?? 'N/A'}
+- Churn recente: ${churn?.churn_percentage != null ? `${churn.churn_percentage.toFixed(1)}%` : 'N/A'}
+
+CONFIGURACAO DO OTIMIZADOR:
+- Target CPA: R$${config?.target_cpa ?? 'nao definido'}
 - ROAS minimo: ${config?.min_roas ?? 'nao definido'}x
 - Budget min/max diario: R$${config?.min_daily_budget ?? 10} - R$${config?.max_daily_budget ?? 200}
-- CPA medio ultimos 30 dias: R$${avgCpa30d.toFixed(2)}
-- Gasto total 30 dias: R$${totalSpend30d.toFixed(2)}
-- Conversoes totais 30 dias: ${totalConv30d}
 
-TOP CAMPANHAS (por performance):
+TOP CAMPANHAS (historico de performance):
 ${topCampaigns || 'Nenhuma campanha com dados ainda'}
 
-POST SELECIONADO:
+CRIATIVO SELECIONADO:
 - Tipo: ${postType}
-- Legenda: "${postCaption}"
-- Engajamento: Likes=${postEngagement.likes || 0}, Comentarios=${postEngagement.comments || 0}, Alcance=${postEngagement.reach || 0}, Impressoes=${postEngagement.impressions || 0}
+- Legenda/Descricao: "${postCaption}"
+- Engajamento organico: Likes=${postEngagement.likes || 0}, Comentarios=${postEngagement.comments || 0}, Alcance=${postEngagement.reach || 0}
 
 REGRAS:
 - Responda APENAS em JSON valido, sem markdown, sem texto adicional

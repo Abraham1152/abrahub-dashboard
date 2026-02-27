@@ -1408,6 +1408,7 @@ function AdCreatorWizard({ onClose, queryClient }: { onClose: () => void; queryC
   const [adCaption, setAdCaption] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
 
+  const [autoMode, setAutoMode] = useState(true)
   const [destinationUrl, setDestinationUrl] = useState('')
   const [strategy, setStrategy] = useState<AiStrategy | null>(null)
   const [loadingStrategy, setLoadingStrategy] = useState(false)
@@ -1486,6 +1487,10 @@ function AdCreatorWizard({ onClose, queryClient }: { onClose: () => void; queryC
         setEditGender(s.gender || 'all')
         setEditCta(s.cta_type || 'LEARN_MORE')
         setStep(3)
+        // Auto mode: launch immediately after strategy is ready
+        if (autoMode) {
+          await launchWithStrategy(s)
+        }
       }
     } catch {
       setError(t('ads.error_connection'))
@@ -1493,51 +1498,37 @@ function AdCreatorWizard({ onClose, queryClient }: { onClose: () => void; queryC
     setLoadingStrategy(false)
   }
 
-  const launchCampaign = async () => {
+  // Separated so it can be called with a fresh strategy object (auto mode)
+  const launchWithStrategy = async (s: AiStrategy) => {
     if (creatorMode === 'instagram' && !selectedPost) return
     if (creatorMode === 'upload' && !uploadFile) return
-    if (!strategy) return
     setLaunching(true)
     setError(null)
     try {
-      // For video uploads: upload to Supabase Storage first to get a public URL
       let videoUrl: string | null = null
       if (creatorMode === 'upload' && uploadFile && isVideoFile(uploadFile)) {
         const fileName = `${Date.now()}-${uploadFile.name}`
         const { error: storageError } = await supabase.storage
           .from('ad-uploads')
           .upload(fileName, uploadFile, { contentType: uploadFile.type, upsert: false })
-        if (storageError) {
-          setError(`Erro no upload do vídeo: ${storageError.message}`)
-          setLaunching(false)
-          return
-        }
+        if (storageError) { setError(`Erro no upload do vídeo: ${storageError.message}`); setLaunching(false); return }
         const { data: urlData } = supabase.storage.from('ad-uploads').getPublicUrl(fileName)
         videoUrl = urlData.publicUrl
       }
-
-      // Resolve interest IDs
-      const interestRes = await adsAction('/search-interests', 'POST', {
-        keywords: strategy.interests,
-      })
+      const interestRes = await adsAction('/search-interests', 'POST', { keywords: s.interests })
       const resolved = (interestRes.interests || []).slice(0, 15)
-
-      // Build targeting
       const targeting: Record<string, unknown> = {
         geo_locations: { countries: ['BR'] },
-        age_min: editAgeMin,
-        age_max: editAgeMax,
+        age_min: s.age_min || 18,
+        age_max: s.age_max || 65,
         publisher_platforms: ['facebook', 'instagram'],
         instagram_positions: ['stream', 'story', 'reels'],
       }
-      if (editGender === 'male') targeting.genders = [1]
-      else if (editGender === 'female') targeting.genders = [2]
+      if (s.gender === 'male') targeting.genders = [1]
+      else if (s.gender === 'female') targeting.genders = [2]
       if (resolved.length > 0) {
-        targeting.flexible_spec = [{
-          interests: resolved.map((i: { id: string; name: string }) => ({ id: i.id, name: i.name })),
-        }]
+        targeting.flexible_spec = [{ interests: resolved.map((i: { id: string; name: string }) => ({ id: i.id, name: i.name })) }]
       }
-
       const isUpload = creatorMode === 'upload'
       const createRes = await adsAction(isUpload ? '/create-from-upload' : '/create-from-post', 'POST', {
         ...(isUpload
@@ -1546,25 +1537,35 @@ function AdCreatorWizard({ onClose, queryClient }: { onClose: () => void; queryC
             : { image_base64: uploadBase64, image_name: uploadFile?.name || 'ad.jpg', ad_message: adCaption }
           : { ig_media_id: selectedPost!.media_id }),
         destination_url: destinationUrl,
-        campaign_name: editName,
-        daily_budget: editBudget,
+        campaign_name: s.campaign_name,
+        daily_budget: s.daily_budget_brl,
         targeting,
-        cta_type: editCta,
-        source: 'ai_ad_creator',
+        cta_type: s.cta_type,
+        source: 'ai_ad_creator_auto',
       })
-
-      if (createRes.error) {
-        setError(createRes.error)
-      } else {
+      if (createRes.error) { setError(createRes.error) }
+      else {
         setResult(createRes)
         setStep(4)
         queryClient.invalidateQueries({ queryKey: ['ads-campaigns'] })
         queryClient.invalidateQueries({ queryKey: ['ads-agent-actions'] })
       }
-    } catch {
-      setError(t('ads.error_connection'))
-    }
+    } catch { setError(t('ads.error_connection')) }
     setLaunching(false)
+  }
+
+  // Manual mode launch — uses editable state fields
+  const launchCampaign = async () => {
+    if (!strategy) return
+    await launchWithStrategy({
+      ...strategy,
+      campaign_name: editName,
+      daily_budget_brl: editBudget,
+      age_min: editAgeMin,
+      age_max: editAgeMax,
+      gender: editGender,
+      cta_type: editCta,
+    })
   }
 
   const inputClass = 'w-full px-3 py-2.5 text-sm bg-white dark:bg-neutral-800 border border-gray-200 dark:border-neutral-700 rounded-xl text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-blue-500/40 transition-colors'
@@ -1590,9 +1591,24 @@ function AdCreatorWizard({ onClose, queryClient }: { onClose: () => void; queryC
             <p className="text-xs text-gray-500 dark:text-neutral-500">{t('ads.creator_subtitle')}</p>
           </div>
         </div>
-        <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-neutral-800 transition-colors">
-          <X size={16} className="text-gray-400" />
-        </button>
+        <div className="flex items-center gap-2">
+          {/* Auto mode toggle */}
+          <button
+            onClick={() => setAutoMode(!autoMode)}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all ${
+              autoMode
+                ? 'bg-emerald-50 dark:bg-emerald-500/10 border-emerald-200 dark:border-emerald-700 text-emerald-700 dark:text-emerald-400'
+                : 'bg-gray-50 dark:bg-neutral-800 border-gray-200 dark:border-neutral-700 text-gray-500 dark:text-neutral-400'
+            }`}
+            title={autoMode ? t('ads.auto_mode_on_hint') : t('ads.auto_mode_off_hint')}
+          >
+            <Zap size={12} className={autoMode ? 'fill-emerald-500 text-emerald-500' : ''} />
+            {autoMode ? t('ads.auto_mode_on') : t('ads.auto_mode_off')}
+          </button>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-neutral-800 transition-colors">
+            <X size={16} className="text-gray-400" />
+          </button>
+        </div>
       </div>
 
       {/* Step indicator */}
@@ -1828,11 +1844,15 @@ function AdCreatorWizard({ onClose, queryClient }: { onClose: () => void; queryC
             </button>
             <button
               onClick={generateStrategy}
-              disabled={!destinationUrl.startsWith('http') || loadingStrategy}
+              disabled={!destinationUrl.startsWith('http') || loadingStrategy || launching}
               className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-medium bg-gradient-to-r from-purple-600 to-indigo-600 text-white hover:from-purple-700 hover:to-indigo-700 transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-lg"
             >
               {loadingStrategy ? (
                 <><Loader2 size={15} className="animate-spin" /> {t('ads.generating')}</>
+              ) : launching ? (
+                <><Loader2 size={15} className="animate-spin" /> {t('ads.launching')}</>
+              ) : autoMode ? (
+                <><Zap size={15} /> {t('ads.generate_and_launch')}</>
               ) : (
                 <><Sparkles size={15} /> {t('ads.generate_strategy')}</>
               )}
@@ -1841,77 +1861,106 @@ function AdCreatorWizard({ onClose, queryClient }: { onClose: () => void; queryC
         </div>
       )}
 
-      {/* Step 3: AI Strategy Review */}
+      {/* Step 3: AI Strategy */}
       {step === 3 && strategy && (
         <div>
-          {/* AI Reasoning */}
+          {/* AI Reasoning — always shown */}
           <div className="p-3 mb-4 rounded-xl bg-indigo-50 dark:bg-indigo-500/10 border border-indigo-200 dark:border-indigo-800/50">
             <p className="text-xs font-medium text-indigo-700 dark:text-indigo-300 mb-1">{t('ads.ai_reasoning')}</p>
             <p className="text-[11px] text-indigo-600 dark:text-indigo-400 leading-relaxed">{strategy.reasoning}</p>
           </div>
 
-          {/* Editable fields */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
-            <div className="sm:col-span-2">
-              <label className={labelClass}>{t('ads.campaign_name')}</label>
-              <input value={editName} onChange={e => setEditName(e.target.value)} className={inputClass} />
-            </div>
-            <div>
-              <label className={labelClass}>{t('ads.daily_budget_label')}</label>
-              <input type="number" min={5} max={1000} value={editBudget} onChange={e => setEditBudget(Number(e.target.value))} className={inputClass} />
-            </div>
-            <div>
-              <label className={labelClass}>{t('ads.cta_label')}</label>
-              <select value={editCta} onChange={e => setEditCta(e.target.value)} className={inputClass}>
-                {CTA_OPTIONS.map(c => <option key={c} value={c}>{c.replace(/_/g, ' ')}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className={labelClass}>{t('ads.age_range')}</label>
-              <div className="flex items-center gap-2">
-                <input type="number" min={13} max={65} value={editAgeMin} onChange={e => setEditAgeMin(Number(e.target.value))} className={`${inputClass} w-20`} />
-                <span className="text-xs text-gray-400">-</span>
-                <input type="number" min={13} max={65} value={editAgeMax} onChange={e => setEditAgeMax(Number(e.target.value))} className={`${inputClass} w-20`} />
+          {/* Auto mode: show summary card + loading state, no editing */}
+          {autoMode && (
+            <div className="space-y-2 mb-4">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                {[
+                  { label: t('ads.campaign_name'), value: strategy.campaign_name },
+                  { label: t('ads.daily_budget_label'), value: `R$ ${strategy.daily_budget_brl}` },
+                  { label: t('ads.age_range'), value: `${strategy.age_min}–${strategy.age_max}` },
+                  { label: t('ads.cta_label'), value: strategy.cta_type.replace(/_/g, ' ') },
+                ].map(item => (
+                  <div key={item.label} className="p-2 rounded-lg bg-gray-50 dark:bg-neutral-800">
+                    <p className="text-[10px] text-gray-400 dark:text-neutral-500">{item.label}</p>
+                    <p className="text-xs font-semibold text-gray-800 dark:text-neutral-200 truncate">{item.value}</p>
+                  </div>
+                ))}
               </div>
-            </div>
-            <div>
-              <label className={labelClass}>{t('ads.gender_label')}</label>
-              <select value={editGender} onChange={e => setEditGender(e.target.value as 'all' | 'male' | 'female')} className={inputClass}>
-                <option value="all">{t('ads.gender_all')}</option>
-                <option value="male">{t('ads.gender_male')}</option>
-                <option value="female">{t('ads.gender_female')}</option>
-              </select>
-            </div>
-          </div>
-
-          {/* Interest tags */}
-          <div className="mb-4">
-            <label className={labelClass}>{t('ads.interests_label')}</label>
-            <div className="flex flex-wrap gap-1.5">
-              {strategy.interests.map((kw, i) => (
-                <span key={i} className="text-[11px] px-2 py-1 rounded-lg bg-purple-50 dark:bg-purple-500/10 text-purple-600 dark:text-purple-400 font-medium">
-                  {kw}
-                </span>
-              ))}
-            </div>
-          </div>
-
-          <div className="flex items-center justify-between">
-            <button onClick={() => setStep(2)} className="flex items-center gap-1 text-sm text-gray-500 dark:text-neutral-400 hover:text-gray-700 dark:hover:text-neutral-300">
-              <ChevronLeft size={15} /> {t('ads.step_destination')}
-            </button>
-            <button
-              onClick={launchCampaign}
-              disabled={launching || !editName}
-              className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-medium bg-gradient-to-r from-emerald-600 to-green-600 text-white hover:from-emerald-700 hover:to-green-700 transition-all disabled:opacity-40 shadow-lg"
-            >
-              {launching ? (
-                <><Loader2 size={15} className="animate-spin" /> {t('ads.launching')}</>
-              ) : (
-                <><Rocket size={15} /> {t('ads.launch_campaign')}</>
+              <div className="flex flex-wrap gap-1.5">
+                {strategy.interests.map((kw, i) => (
+                  <span key={i} className="text-[11px] px-2 py-0.5 rounded-md bg-purple-50 dark:bg-purple-500/10 text-purple-600 dark:text-purple-400 font-medium">{kw}</span>
+                ))}
+              </div>
+              {launching && (
+                <div className="flex items-center gap-2 p-3 rounded-xl bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-800/50">
+                  <Loader2 size={15} className="animate-spin text-emerald-600 dark:text-emerald-400 shrink-0" />
+                  <p className="text-xs text-emerald-700 dark:text-emerald-400">{t('ads.auto_launching')}</p>
+                </div>
               )}
-            </button>
-          </div>
+            </div>
+          )}
+
+          {/* Manual mode: editable fields + launch button */}
+          {!autoMode && (
+            <>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+                <div className="sm:col-span-2">
+                  <label className={labelClass}>{t('ads.campaign_name')}</label>
+                  <input value={editName} onChange={e => setEditName(e.target.value)} className={inputClass} />
+                </div>
+                <div>
+                  <label className={labelClass}>{t('ads.daily_budget_label')}</label>
+                  <input type="number" min={5} max={1000} value={editBudget} onChange={e => setEditBudget(Number(e.target.value))} className={inputClass} />
+                </div>
+                <div>
+                  <label className={labelClass}>{t('ads.cta_label')}</label>
+                  <select value={editCta} onChange={e => setEditCta(e.target.value)} className={inputClass}>
+                    {CTA_OPTIONS.map(c => <option key={c} value={c}>{c.replace(/_/g, ' ')}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className={labelClass}>{t('ads.age_range')}</label>
+                  <div className="flex items-center gap-2">
+                    <input type="number" min={13} max={65} value={editAgeMin} onChange={e => setEditAgeMin(Number(e.target.value))} className={`${inputClass} w-20`} />
+                    <span className="text-xs text-gray-400">-</span>
+                    <input type="number" min={13} max={65} value={editAgeMax} onChange={e => setEditAgeMax(Number(e.target.value))} className={`${inputClass} w-20`} />
+                  </div>
+                </div>
+                <div>
+                  <label className={labelClass}>{t('ads.gender_label')}</label>
+                  <select value={editGender} onChange={e => setEditGender(e.target.value as 'all' | 'male' | 'female')} className={inputClass}>
+                    <option value="all">{t('ads.gender_all')}</option>
+                    <option value="male">{t('ads.gender_male')}</option>
+                    <option value="female">{t('ads.gender_female')}</option>
+                  </select>
+                </div>
+              </div>
+              <div className="mb-4">
+                <label className={labelClass}>{t('ads.interests_label')}</label>
+                <div className="flex flex-wrap gap-1.5">
+                  {strategy.interests.map((kw, i) => (
+                    <span key={i} className="text-[11px] px-2 py-1 rounded-lg bg-purple-50 dark:bg-purple-500/10 text-purple-600 dark:text-purple-400 font-medium">{kw}</span>
+                  ))}
+                </div>
+              </div>
+              <div className="flex items-center justify-between">
+                <button onClick={() => setStep(2)} className="flex items-center gap-1 text-sm text-gray-500 dark:text-neutral-400 hover:text-gray-700 dark:hover:text-neutral-300">
+                  <ChevronLeft size={15} /> {t('ads.step_destination')}
+                </button>
+                <button
+                  onClick={launchCampaign}
+                  disabled={launching || !editName}
+                  className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-medium bg-gradient-to-r from-emerald-600 to-green-600 text-white hover:from-emerald-700 hover:to-green-700 transition-all disabled:opacity-40 shadow-lg"
+                >
+                  {launching ? (
+                    <><Loader2 size={15} className="animate-spin" /> {t('ads.launching')}</>
+                  ) : (
+                    <><Rocket size={15} /> {t('ads.launch_campaign')}</>
+                  )}
+                </button>
+              </div>
+            </>
+          )}
         </div>
       )}
 
