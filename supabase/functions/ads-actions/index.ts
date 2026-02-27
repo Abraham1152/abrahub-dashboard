@@ -292,6 +292,7 @@ async function handleAiStrategy(
   }
 
   const postCaption = body.post_caption as string || ''
+  const adBrief = body.ad_brief as string || ''
   const postType = body.post_type as string || 'IMAGE'
   const postEngagement = body.post_engagement as Record<string, unknown> || {}
 
@@ -325,11 +326,22 @@ async function handleAiStrategy(
       ).join('\n\n')
     : 'Nenhum documento de estrategia disponivel.'
 
-  const systemPrompt = `Voce e o Estrategista de Trafego Pago da ABRAhub Studio.
+  const briefSection = adBrief.trim()
+    ? `BRIEFING DO ANUNCIANTE (contexto fornecido pelo usuario — alta prioridade):
+"${adBrief.trim()}"
 
-Sua tarefa: analisar um post do Instagram que sera usado como creative de um anuncio Meta Ads e sugerir a melhor estrategia de campanha.
+Leve este briefing como direcao principal ao definir publico, interesses, CTA e tom da campanha.
 
-ESTRATEGIA E CONHECIMENTO DA EMPRESA:
+---
+
+`
+    : ''
+
+  const systemPrompt = `Voce e o Estrategista de Trafego Pago da ABRAhub Studio. Voce foi treinado com as melhores praticas de gestao de trafego pago para estudio de fitness/crossfit brasileiro.
+
+Sua tarefa: analisar o criativo e o briefing do anunciante, cruzar com os dados de performance historica e o conhecimento de estrategia da empresa, e definir a melhor estrategia de campanha Meta Ads para lancar agora.
+
+${briefSection}ESTRATEGIA E CONHECIMENTO DA EMPRESA:
 ${kbContext}
 
 ---

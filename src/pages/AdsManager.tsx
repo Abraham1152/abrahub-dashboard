@@ -1406,6 +1406,7 @@ function AdCreatorWizard({ onClose, queryClient }: { onClose: () => void; queryC
   const [uploadPreview, setUploadPreview] = useState<string | null>(null)
   const [uploadBase64, setUploadBase64] = useState<string | null>(null)
   const [adCaption, setAdCaption] = useState('')
+  const [adBrief, setAdBrief] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const [autoMode, setAutoMode] = useState(true)
@@ -1467,6 +1468,7 @@ function AdCreatorWizard({ onClose, queryClient }: { onClose: () => void; queryC
         : adCaption
       const res = await adsAction('/ai-strategy', 'POST', {
         post_caption: caption,
+        ad_brief: adBrief,
         post_type: creatorMode === 'instagram' ? selectedPost?.media_type : 'IMAGE',
         post_engagement: creatorMode === 'instagram' ? {
           likes: selectedPost?.like_count || 0,
@@ -1783,6 +1785,27 @@ function AdCreatorWizard({ onClose, queryClient }: { onClose: () => void; queryC
             </div>
           )}
 
+          {/* AI Brief — shared for both modes */}
+          <div className="mt-4 p-4 rounded-2xl bg-gradient-to-br from-indigo-50 to-purple-50 dark:from-indigo-950/40 dark:to-purple-950/40 border border-indigo-100 dark:border-indigo-900/50">
+            <div className="flex items-center gap-2 mb-2">
+              <div className="w-6 h-6 rounded-lg bg-indigo-600 flex items-center justify-center shrink-0">
+                <Sparkles size={13} className="text-white" />
+              </div>
+              <p className="text-xs font-semibold text-indigo-800 dark:text-indigo-300">{t('ads.brief_title')}</p>
+            </div>
+            <p className="text-[11px] text-indigo-600 dark:text-indigo-400 mb-2">{t('ads.brief_hint')}</p>
+            <textarea
+              rows={3}
+              value={adBrief}
+              onChange={e => setAdBrief(e.target.value)}
+              placeholder={t('ads.brief_placeholder')}
+              className="w-full px-3 py-2 text-sm bg-white dark:bg-neutral-900 border border-indigo-200 dark:border-indigo-800 rounded-xl text-gray-900 dark:text-white placeholder-indigo-300 dark:placeholder-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 resize-none"
+            />
+            {adBrief.length > 0 && (
+              <p className="text-[10px] text-indigo-400 dark:text-indigo-500 mt-1 text-right">{adBrief.length} {t('ads.brief_chars')}</p>
+            )}
+          </div>
+
           <div className="flex justify-end mt-4">
             <button
               onClick={() => setStep(2)}
@@ -1824,6 +1847,13 @@ function AdCreatorWizard({ onClose, queryClient }: { onClose: () => void; queryC
                 <p className="text-[11px] text-gray-500 dark:text-neutral-400 mt-0.5">{uploadFile.name}</p>
                 {adCaption && <p className="text-[11px] text-gray-400 dark:text-neutral-500 line-clamp-2 mt-0.5">{adCaption.substring(0, 100)}</p>}
               </div>
+            </div>
+          )}
+          {/* Brief preview */}
+          {adBrief && (
+            <div className="flex items-start gap-2 mb-4 p-3 rounded-xl bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900/50">
+              <Sparkles size={14} className="text-indigo-500 dark:text-indigo-400 mt-0.5 shrink-0" />
+              <p className="text-[11px] text-indigo-700 dark:text-indigo-300 line-clamp-3">{adBrief}</p>
             </div>
           )}
           <label className={labelClass}>{t('ads.enter_url')}</label>
