@@ -76,6 +76,7 @@ const SYNC_FUNCTIONS = [
   'sync-youtube',
   'sync-instagram',
   'sync-ads',
+  'sync-google-ads',
   'sync-adsense',
 ]
 

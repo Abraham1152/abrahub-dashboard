@@ -48,6 +48,8 @@ import {
   ShieldCheck,
   ThumbsUp,
   ThumbsDown,
+  ChevronDown,
+  BookOpen,
 } from 'lucide-react'
 
 // ==================== TYPES ====================
@@ -74,9 +76,54 @@ interface AdsCampaign {
   updated_time: string | null
   last_synced_at: string
   created_at: string
+  _platform: 'meta'
 }
 
-type SortField = 'spend' | 'impressions' | 'clicks' | 'ctr' | 'name' | 'cost_per_result' | 'conversions'
+interface GoogleAdsCampaign {
+  id: string
+  campaign_id: string
+  customer_id: string
+  name: string
+  status: string
+  campaign_type: string | null
+  bidding_strategy: string | null
+  daily_budget: number
+  cost: number
+  impressions: number
+  clicks: number
+  conversions: number
+  cpc: number
+  cpm: number
+  ctr: number
+  cost_per_conversion: number
+  search_impression_share: number | null
+  last_synced_at: string
+  created_at: string
+  _platform: 'google'
+}
+
+// Normalized shape for unified rendering
+interface NormalizedCampaign {
+  id: string
+  campaign_id: string
+  name: string
+  status: string
+  daily_budget: number | null
+  lifetime_budget?: number | null
+  impressions: number
+  clicks: number
+  spend: number
+  cpc: number
+  cpm: number
+  ctr: number
+  conversions: number
+  cpa: number
+  campaign_type?: string | null
+  platform: 'meta' | 'google'
+}
+
+type Platform = 'all' | 'meta' | 'google'
+type SortField = 'spend' | 'impressions' | 'clicks' | 'ctr' | 'name' | 'cpa' | 'conversions'
 type SortDir = 'asc' | 'desc'
 
 interface ChatMessage {
@@ -95,9 +142,11 @@ const fmtPct = (n: number) => `${n.toFixed(2)}%`
 
 const statusConfig: Record<string, { key: string; color: string; icon: any }> = {
   ACTIVE: { key: 'ads.active_label', color: 'bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300', icon: Target },
+  ENABLED: { key: 'ads.enabled_label', color: 'bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300', icon: Target },
   PAUSED: { key: 'ads.paused_label', color: 'bg-yellow-100 dark:bg-yellow-500/20 text-yellow-700 dark:text-yellow-300', icon: Pause },
   DELETED: { key: 'ads.deleted_label', color: 'bg-red-100 dark:bg-red-500/20 text-red-700 dark:text-red-300', icon: Trash2 },
   ARCHIVED: { key: 'ads.archived_label', color: 'bg-gray-100 dark:bg-neutral-500/20 text-gray-600 dark:text-neutral-400', icon: Archive },
+  REMOVED: { key: 'ads.deleted_label', color: 'bg-red-100 dark:bg-red-500/20 text-red-700 dark:text-red-300', icon: Trash2 },
 }
 
 const CHART_COLORS = ['#8b5cf6', '#ec4899', '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#6366f1', '#14b8a6']
@@ -114,6 +163,58 @@ async function adsAction(path: string, method = 'POST', body?: any) {
   return res.json()
 }
 
+async function googleAdsAction(path: string, method = 'POST', body?: any) {
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/google-ads-actions/${path}`, {
+    method,
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${ANON_KEY}`,
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  })
+  return res.json()
+}
+
+function normalizeMetaCampaign(c: AdsCampaign): NormalizedCampaign {
+  return {
+    id: c.id,
+    campaign_id: c.campaign_id,
+    name: c.name,
+    status: c.status,
+    daily_budget: c.daily_budget,
+    lifetime_budget: c.lifetime_budget,
+    impressions: c.impressions,
+    clicks: c.clicks,
+    spend: c.spend,
+    cpc: c.cpc,
+    cpm: c.cpm,
+    ctr: c.ctr,
+    conversions: c.conversions,
+    cpa: c.cost_per_result,
+    platform: 'meta',
+  }
+}
+
+function normalizeGoogleCampaign(c: GoogleAdsCampaign): NormalizedCampaign {
+  return {
+    id: c.id,
+    campaign_id: c.campaign_id,
+    name: c.name,
+    status: c.status,
+    daily_budget: c.daily_budget,
+    impressions: c.impressions,
+    clicks: c.clicks,
+    spend: c.cost,
+    cpc: c.cpc,
+    cpm: c.cpm,
+    ctr: c.ctr,
+    conversions: c.conversions,
+    cpa: c.cost_per_conversion,
+    campaign_type: c.campaign_type,
+    platform: 'google',
+  }
+}
+
 // ==================== MAIN PAGE ====================
 
 export default function AdsManagerPage() {
@@ -126,16 +227,42 @@ export default function AdsManagerPage() {
   const [sortDir, setSortDir] = useState<SortDir>('desc')
   const [showConfig, setShowConfig] = useState(false)
   const [showCreator, setShowCreator] = useState(false)
+  const [showGoogleSetup, setShowGoogleSetup] = useState(false)
+  const [platform, setPlatform] = useState<Platform>('all')
 
-  // Fetch campaigns
-  const { data: campaigns = [], isLoading } = useQuery({
+  // Fetch Meta campaigns
+  const { data: metaCampaigns = [], isLoading: loadingMeta } = useQuery({
     queryKey: ['ads-campaigns'],
     queryFn: async () => {
       const { data } = await supabase
         .from('ads_campaigns')
         .select('*')
         .order('spend', { ascending: false })
-      return (data || []) as AdsCampaign[]
+      return (data || []).map((c: any) => ({ ...c, _platform: 'meta' as const })) as AdsCampaign[]
+    },
+  })
+
+  // Fetch Google campaigns
+  const { data: googleCampaigns = [], isLoading: loadingGoogle } = useQuery({
+    queryKey: ['google-ads-campaigns'],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from('google_ads_campaigns' as any)
+        .select('*')
+        .order('cost', { ascending: false })
+      return (data || []).map((c: any) => ({ ...c, _platform: 'google' as const })) as GoogleAdsCampaign[]
+    },
+  })
+
+  // Fetch Google config
+  const { data: googleConfig } = useQuery({
+    queryKey: ['google-ads-config'],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from('google_ads_config' as any)
+        .select('id, customer_id, is_connected, updated_at')
+        .single()
+      return data as any
     },
   })
 
@@ -153,23 +280,41 @@ export default function AdsManagerPage() {
     },
   })
 
+  const isLoading = loadingMeta && loadingGoogle
+
+  // Normalize all campaigns
+  const allNormalized: NormalizedCampaign[] = [
+    ...(platform === 'google' ? [] : metaCampaigns.map(normalizeMetaCampaign)),
+    ...(platform === 'meta' ? [] : googleCampaigns.map(normalizeGoogleCampaign)),
+  ]
 
   // Sync ads
   const handleSync = async () => {
     setSyncing(true)
     try {
-      await fetch(`${SUPABASE_URL}/functions/v1/sync-ads`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${ANON_KEY}` },
-      })
+      const syncs: Promise<any>[] = []
+      if (platform !== 'google') {
+        syncs.push(fetch(`${SUPABASE_URL}/functions/v1/sync-ads`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${ANON_KEY}` },
+        }))
+      }
+      if (platform !== 'meta') {
+        syncs.push(fetch(`${SUPABASE_URL}/functions/v1/sync-google-ads`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${ANON_KEY}` },
+        }))
+      }
+      await Promise.all(syncs)
       queryClient.invalidateQueries({ queryKey: ['ads-campaigns'] })
+      queryClient.invalidateQueries({ queryKey: ['google-ads-campaigns'] })
       queryClient.invalidateQueries({ queryKey: ['ads-agent-actions'] })
     } catch {}
     setSyncing(false)
   }
 
   // Sort
-  const sorted = [...campaigns].sort((a, b) => {
+  const sorted = [...allNormalized].sort((a, b) => {
     const dir = sortDir === 'asc' ? 1 : -1
     if (sortField === 'name') return dir * a.name.localeCompare(b.name)
     return dir * ((a[sortField] as number) - (b[sortField] as number))
@@ -181,18 +326,18 @@ export default function AdsManagerPage() {
   }
 
   // KPI calculations
-  const totalSpend = campaigns.reduce((s, c) => s + c.spend, 0)
-  const totalConversions = campaigns.reduce((s, c) => s + c.conversions, 0)
-  const activeCampaigns = campaigns.filter(c => c.status === 'ACTIVE').length
+  const totalSpend = allNormalized.reduce((s, c) => s + c.spend, 0)
+  const totalConversions = allNormalized.reduce((s, c) => s + c.conversions, 0)
+  const activeCampaigns = allNormalized.filter(c => c.status === 'ACTIVE' || c.status === 'ENABLED').length
   const avgCpa = totalConversions > 0 ? totalSpend / totalConversions : 0
   const newCustomers = churnData?.new_customers || 0
   const cac = newCustomers > 0 ? totalSpend / newCustomers : 0
-  const totalImpressions = campaigns.reduce((s, c) => s + c.impressions, 0)
-  const totalClicks = campaigns.reduce((s, c) => s + c.clicks, 0)
+  const totalImpressions = allNormalized.reduce((s, c) => s + c.impressions, 0)
+  const totalClicks = allNormalized.reduce((s, c) => s + c.clicks, 0)
   const avgCtr = totalImpressions > 0 ? (totalClicks / totalImpressions) * 100 : 0
 
   // Chart data
-  const chartData = campaigns
+  const chartData = allNormalized
     .filter(c => c.spend > 0)
     .sort((a, b) => b.spend - a.spend)
     .slice(0, 8)
@@ -202,8 +347,9 @@ export default function AdsManagerPage() {
     }))
 
   // Status breakdown
-  const statusBreakdown = campaigns.reduce((acc, c) => {
-    acc[c.status] = (acc[c.status] || 0) + 1
+  const statusBreakdown = allNormalized.reduce((acc, c) => {
+    const displayStatus = c.status === 'ENABLED' ? 'ACTIVE' : c.status
+    acc[displayStatus] = (acc[displayStatus] || 0) + 1
     return acc
   }, {} as Record<string, number>)
 
@@ -226,22 +372,24 @@ export default function AdsManagerPage() {
           <div>
             <h1 className="text-2xl font-bold text-gray-900 dark:text-white">{t('ads.title')}</h1>
             <p className="text-gray-500 dark:text-neutral-500 text-sm">
-              {campaigns.length} {t('ads.campaigns')} · {activeCampaigns} {t('ads.active')}
+              {allNormalized.length} {t('ads.campaigns')} · {activeCampaigns} {t('ads.active')}
             </p>
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <button
-            onClick={() => setShowCreator(!showCreator)}
-            className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-medium transition-all ${
-              showCreator
-                ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-lg'
-                : 'bg-white dark:bg-neutral-900 border border-gray-200 dark:border-neutral-800 text-gray-600 dark:text-neutral-400 hover:bg-gray-50 dark:hover:bg-neutral-800'
-            }`}
-          >
-            <Sparkles size={15} />
-            {t('ads.create_ad')}
-          </button>
+          {platform !== 'google' && (
+            <button
+              onClick={() => setShowCreator(!showCreator)}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-medium transition-all ${
+                showCreator
+                  ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-lg'
+                  : 'bg-white dark:bg-neutral-900 border border-gray-200 dark:border-neutral-800 text-gray-600 dark:text-neutral-400 hover:bg-gray-50 dark:hover:bg-neutral-800'
+              }`}
+            >
+              <Sparkles size={15} />
+              {t('ads.create_ad')}
+            </button>
+          )}
           <button
             onClick={() => setShowConfig(!showConfig)}
             className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-medium transition-all ${
@@ -264,14 +412,46 @@ export default function AdsManagerPage() {
         </div>
       </div>
 
-      {/* AI Ad Creator Wizard */}
-      {showCreator && <AdCreatorWizard onClose={() => setShowCreator(false)} queryClient={queryClient} />}
+      {/* Platform Tabs */}
+      <div className="flex items-center gap-1 bg-white dark:bg-neutral-900 border border-gray-200 dark:border-neutral-800 rounded-xl p-1 w-fit">
+        {(['all', 'meta', 'google'] as Platform[]).map((p) => (
+          <button
+            key={p}
+            onClick={() => { setPlatform(p); setShowCreator(false); setShowGoogleSetup(false) }}
+            className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+              platform === p
+                ? 'bg-blue-600 text-white shadow-sm'
+                : 'text-gray-500 dark:text-neutral-400 hover:bg-gray-100 dark:hover:bg-neutral-800'
+            }`}
+          >
+            {t(`ads.platform_${p}`)}
+          </button>
+        ))}
+        {!googleConfig?.is_connected && (
+          <button
+            onClick={() => setShowGoogleSetup(!showGoogleSetup)}
+            className={`ml-1 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+              showGoogleSetup
+                ? 'bg-amber-100 dark:bg-amber-500/20 text-amber-600 dark:text-amber-400'
+                : 'text-amber-500 hover:bg-amber-50 dark:hover:bg-amber-500/10'
+            }`}
+          >
+            {t('ads.google_setup')}
+          </button>
+        )}
+      </div>
+
+      {/* Google Ads Setup Panel */}
+      {showGoogleSetup && <GoogleAdsSetup queryClient={queryClient} />}
+
+      {/* AI Ad Creator Wizard — Meta only */}
+      {showCreator && platform !== 'google' && <AdCreatorWizard onClose={() => setShowCreator(false)} queryClient={queryClient} />}
 
       {/* Optimizer Config Panel */}
       {showConfig && <OptimizerConfig />}
 
       {/* Pending Approval Cards */}
-      <PendingApprovalCards />
+      <PendingApprovalCards platform={platform} />
 
       {/* 6 KPI Cards */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
@@ -328,7 +508,7 @@ export default function AdsManagerPage() {
           </div>
           <div className="mt-6 pt-4 border-t border-gray-100 dark:border-neutral-800">
             <p className="text-xs text-gray-500 dark:text-neutral-500">{t('ads.total')}</p>
-            <p className="text-3xl font-bold text-gray-900 dark:text-white">{campaigns.length}</p>
+            <p className="text-3xl font-bold text-gray-900 dark:text-white">{allNormalized.length}</p>
           </div>
         </div>
       </div>
@@ -341,7 +521,7 @@ export default function AdsManagerPage() {
         <div className="lg:col-span-2">
           <AdsAgentChat />
         </div>
-        <ActionHistory />
+        <ActionHistory platform={platform} />
       </div>
     </div>
   )
@@ -384,7 +564,7 @@ interface PendingAction {
   created_at: string
 }
 
-function PendingApprovalCards() {
+function PendingApprovalCards({ platform }: { platform: Platform }) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const [loadingId, setLoadingId] = useState<string | null>(null)
@@ -393,12 +573,17 @@ function PendingApprovalCards() {
     queryKey: ['ads-pending-actions'],
     queryFn: async () => {
       const res = await adsAction('/pending-actions', 'GET')
-      return (res.pending_actions || []) as PendingAction[]
+      return (res.pending_actions || []) as (PendingAction & { platform?: string })[]
     },
     refetchInterval: 30000,
   })
 
-  if (pendingActions.length === 0) return null
+  const filtered = pendingActions.filter(a => {
+    if (platform === 'all') return true
+    return (a.platform || 'meta') === platform
+  })
+
+  if (filtered.length === 0) return null
 
   const handleApprove = async (id: string) => {
     setLoadingId(id)
@@ -434,13 +619,13 @@ function PendingApprovalCards() {
           <ShieldCheck size={16} className="text-white" />
         </div>
         <div>
-          <h3 className="text-sm font-bold text-gray-900 dark:text-white">{t('ads.pending_actions')} ({pendingActions.length})</h3>
+          <h3 className="text-sm font-bold text-gray-900 dark:text-white">{t('ads.pending_actions')} ({filtered.length})</h3>
           <p className="text-[11px] text-gray-500 dark:text-neutral-500">{t('ads.pending_actions_desc')}</p>
         </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-        {pendingActions.map((action) => {
+        {filtered.map((action) => {
           const cfg = actionLabels[action.action_type] || actionLabels.pause
           const Icon = cfg.icon
           const isLoading = loadingId === action.id
@@ -524,7 +709,7 @@ function PendingApprovalCards() {
 // ==================== CAMPAIGN TABLE ====================
 
 function CampaignTable({ campaigns, sortField, sortDir, toggleSort, queryClient }: {
-  campaigns: AdsCampaign[]
+  campaigns: NormalizedCampaign[]
   sortField: SortField
   sortDir: SortDir
   toggleSort: (f: SortField) => void
@@ -535,24 +720,35 @@ function CampaignTable({ campaigns, sortField, sortDir, toggleSort, queryClient 
   const [editingBudget, setEditingBudget] = useState<string | null>(null)
   const [budgetValue, setBudgetValue] = useState('')
 
-  const handleTogglePause = async (campaign: AdsCampaign) => {
-    const action = campaign.status === 'ACTIVE' ? 'pause' : 'resume'
+  const handleTogglePause = async (campaign: NormalizedCampaign) => {
+    const isActive = campaign.status === 'ACTIVE' || campaign.status === 'ENABLED'
+    const action = isActive ? 'pause' : 'resume'
     setActionLoading(campaign.campaign_id)
     try {
-      await adsAction(`/${action}/${campaign.campaign_id}`)
-      queryClient.invalidateQueries({ queryKey: ['ads-campaigns'] })
+      if (campaign.platform === 'google') {
+        await googleAdsAction(`${action}/${campaign.campaign_id}`)
+        queryClient.invalidateQueries({ queryKey: ['google-ads-campaigns'] })
+      } else {
+        await adsAction(`/${action}/${campaign.campaign_id}`)
+        queryClient.invalidateQueries({ queryKey: ['ads-campaigns'] })
+      }
       queryClient.invalidateQueries({ queryKey: ['ads-agent-actions'] })
     } catch {}
     setActionLoading(null)
   }
 
-  const handleBudgetSave = async (campaign: AdsCampaign) => {
+  const handleBudgetSave = async (campaign: NormalizedCampaign) => {
     const val = parseFloat(budgetValue)
     if (isNaN(val) || val <= 0) return
     setActionLoading(campaign.campaign_id)
     try {
-      await adsAction(`/budget/${campaign.campaign_id}`, 'POST', { daily_budget: val })
-      queryClient.invalidateQueries({ queryKey: ['ads-campaigns'] })
+      if (campaign.platform === 'google') {
+        await googleAdsAction(`budget/${campaign.campaign_id}`, 'POST', { daily_budget: val })
+        queryClient.invalidateQueries({ queryKey: ['google-ads-campaigns'] })
+      } else {
+        await adsAction(`/budget/${campaign.campaign_id}`, 'POST', { daily_budget: val })
+        queryClient.invalidateQueries({ queryKey: ['ads-campaigns'] })
+      }
       queryClient.invalidateQueries({ queryKey: ['ads-agent-actions'] })
     } catch {}
     setActionLoading(null)
@@ -583,7 +779,7 @@ function CampaignTable({ campaigns, sortField, sortDir, toggleSort, queryClient 
                 <SortHeader label={t('ads.spend')} field="spend" current={sortField} dir={sortDir} onSort={toggleSort} />
                 <SortHeader label={t('ads.clicks')} field="clicks" current={sortField} dir={sortDir} onSort={toggleSort} />
                 <SortHeader label={t('ads.ctr')} field="ctr" current={sortField} dir={sortDir} onSort={toggleSort} />
-                <SortHeader label={t('ads.cpa')} field="cost_per_result" current={sortField} dir={sortDir} onSort={toggleSort} />
+                <SortHeader label={t('ads.cpa')} field="cpa" current={sortField} dir={sortDir} onSort={toggleSort} />
                 <SortHeader label={t('ads.conv')} field="conversions" current={sortField} dir={sortDir} onSort={toggleSort} />
                 <th className="text-left text-xs font-semibold text-gray-500 dark:text-neutral-500 px-4 py-3">{t('ads.actions')}</th>
               </tr>
@@ -594,11 +790,21 @@ function CampaignTable({ campaigns, sortField, sortDir, toggleSort, queryClient 
                 const Icon = cfg.icon
                 const isEditing = editingBudget === c.campaign_id
                 const isLoadingThis = actionLoading === c.campaign_id
+                const isActive = c.status === 'ACTIVE' || c.status === 'ENABLED'
 
                 return (
                   <tr key={c.id} className="border-b border-gray-50 dark:border-neutral-800/50 hover:bg-gray-50 dark:hover:bg-neutral-800/50 transition-colors">
                     <td className="px-4 py-3">
-                      <span className="text-sm font-medium text-gray-900 dark:text-white line-clamp-1 max-w-[200px]">{c.name}</span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-sm font-medium text-gray-900 dark:text-white line-clamp-1 max-w-[200px]">{c.name}</span>
+                        <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold shrink-0 ${
+                          c.platform === 'google'
+                            ? 'bg-blue-50 dark:bg-blue-500/10 text-blue-500'
+                            : 'bg-indigo-50 dark:bg-indigo-500/10 text-indigo-500'
+                        }`}>
+                          {c.platform === 'google' ? 'G' : 'M'}
+                        </span>
+                      </div>
                     </td>
                     <td className="px-4 py-3">
                       <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold ${cfg.color}`}>
@@ -632,20 +838,20 @@ function CampaignTable({ campaigns, sortField, sortDir, toggleSort, queryClient 
                     <td className="px-4 py-3 text-sm font-semibold text-gray-900 dark:text-white whitespace-nowrap">{BRL(c.spend)}</td>
                     <td className="px-4 py-3 text-sm text-gray-700 dark:text-neutral-300">{fmtNum(c.clicks)}</td>
                     <td className="px-4 py-3 text-sm font-medium text-purple-600 dark:text-purple-400">{fmtPct(c.ctr)}</td>
-                    <td className="px-4 py-3 text-sm text-gray-700 dark:text-neutral-300 whitespace-nowrap">{c.cost_per_result > 0 ? BRL(c.cost_per_result) : '-'}</td>
+                    <td className="px-4 py-3 text-sm text-gray-700 dark:text-neutral-300 whitespace-nowrap">{c.cpa > 0 ? BRL(c.cpa) : '-'}</td>
                     <td className="px-4 py-3 text-sm font-semibold text-gray-900 dark:text-white">{c.conversions > 0 ? c.conversions : '-'}</td>
                     <td className="px-4 py-3">
                       <button
                         onClick={() => handleTogglePause(c)}
-                        disabled={isLoadingThis || c.status === 'DELETED' || c.status === 'ARCHIVED'}
+                        disabled={isLoadingThis || c.status === 'DELETED' || c.status === 'ARCHIVED' || c.status === 'REMOVED'}
                         className={`p-1.5 rounded-lg transition-colors disabled:opacity-30 ${
-                          c.status === 'ACTIVE'
+                          isActive
                             ? 'text-amber-500 hover:bg-amber-50 dark:hover:bg-amber-500/10'
                             : 'text-emerald-500 hover:bg-emerald-50 dark:hover:bg-emerald-500/10'
                         }`}
-                        title={c.status === 'ACTIVE' ? t('ads.pause') : t('ads.resume')}
+                        title={isActive ? t('ads.pause') : t('ads.resume')}
                       >
-                        {isLoadingThis ? <Loader2 size={14} className="animate-spin" /> : c.status === 'ACTIVE' ? <Pause size={14} /> : <Play size={14} />}
+                        {isLoadingThis ? <Loader2 size={14} className="animate-spin" /> : isActive ? <Pause size={14} /> : <Play size={14} />}
                       </button>
                     </td>
                   </tr>
@@ -911,19 +1117,24 @@ function AdsAgentChat() {
 
 // ==================== ACTION HISTORY ====================
 
-function ActionHistory() {
+function ActionHistory({ platform }: { platform: Platform }) {
   const { t } = useTranslation()
-  const { data: actions = [] } = useQuery({
+  const { data: allActions = [] } = useQuery({
     queryKey: ['ads-agent-actions'],
     queryFn: async () => {
       const { data } = await supabase
         .from('ads_agent_actions' as any)
         .select('*')
         .order('created_at', { ascending: false })
-        .limit(30)
+        .limit(50)
       return (data as any[]) || []
     },
   })
+
+  const actions = allActions.filter((a: any) => {
+    if (platform === 'all') return true
+    return (a.platform || 'meta') === platform
+  }).slice(0, 30)
 
   const actionIcons: Record<string, { icon: any; color: string }> = {
     pause_campaign: { icon: Pause, color: 'text-amber-500 bg-amber-50 dark:bg-amber-500/10' },
@@ -992,6 +1203,13 @@ function ActionHistory() {
                         }`}>
                           {a.source}
                         </span>
+                        {a.platform && (
+                          <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold ${
+                            a.platform === 'google' ? 'bg-blue-50 dark:bg-blue-500/10 text-blue-500' : 'bg-indigo-50 dark:bg-indigo-500/10 text-indigo-500'
+                          }`}>
+                            {a.platform === 'google' ? 'G' : 'M'}
+                          </span>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -1000,6 +1218,162 @@ function ActionHistory() {
             })}
           </div>
         )}
+      </div>
+    </div>
+  )
+}
+
+// ==================== GOOGLE ADS SETUP ====================
+
+function GoogleAdsSetup({ queryClient }: { queryClient: ReturnType<typeof useQueryClient> }) {
+  const { t } = useTranslation()
+  const [saving, setSaving] = useState(false)
+  const [testing, setTesting] = useState(false)
+  const [showGuide, setShowGuide] = useState(false)
+  const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null)
+  const [form, setForm] = useState({
+    customer_id: '',
+    developer_token: '',
+    client_id: '',
+    client_secret: '',
+    refresh_token: '',
+  })
+
+  // Load existing config
+  const { data: config } = useQuery({
+    queryKey: ['google-ads-config-full'],
+    queryFn: async () => {
+      const res = await googleAdsAction('config', 'GET')
+      return res
+    },
+  })
+
+  useEffect(() => {
+    if (config?.customer_id) {
+      setForm(prev => ({ ...prev, customer_id: config.customer_id || '' }))
+    }
+  }, [config])
+
+  const handleSave = async () => {
+    setSaving(true)
+    setTestResult(null)
+    try {
+      await googleAdsAction('config', 'POST', form)
+      queryClient.invalidateQueries({ queryKey: ['google-ads-config'] })
+      queryClient.invalidateQueries({ queryKey: ['google-ads-config-full'] })
+    } catch {}
+    setSaving(false)
+  }
+
+  const handleTest = async () => {
+    setTesting(true)
+    setTestResult(null)
+    try {
+      const res = await googleAdsAction('test-connection', 'POST')
+      if (res.success) {
+        setTestResult({ success: true, message: `${t('ads.connection_success')} (${res.customer_name})` })
+        queryClient.invalidateQueries({ queryKey: ['google-ads-config'] })
+      } else {
+        setTestResult({ success: false, message: res.error || t('ads.connection_failed') })
+      }
+    } catch {
+      setTestResult({ success: false, message: t('ads.connection_failed') })
+    }
+    setTesting(false)
+  }
+
+  const inputClass = 'w-full px-3 py-2 text-sm bg-white dark:bg-neutral-800 border border-gray-200 dark:border-neutral-700 rounded-lg text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-blue-500/40'
+
+  return (
+    <div className="card p-5 border-2 border-amber-200 dark:border-amber-800/50">
+      <div className="flex items-center gap-2 mb-4">
+        <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-cyan-500 flex items-center justify-center">
+          <Settings size={16} className="text-white" />
+        </div>
+        <div>
+          <h3 className="text-sm font-bold text-gray-900 dark:text-white">{t('ads.google_setup')}</h3>
+          <p className="text-[11px] text-gray-500 dark:text-neutral-500">{t('ads.google_setup_desc')}</p>
+        </div>
+        <div className="ml-auto flex items-center gap-2">
+          <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
+            config?.is_connected
+              ? 'bg-emerald-100 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400'
+              : 'bg-gray-100 dark:bg-neutral-800 text-gray-400 dark:text-neutral-500'
+          }`}>
+            {config?.is_connected ? t('ads.connected') : t('ads.not_connected')}
+          </span>
+        </div>
+      </div>
+
+      {/* Collapsible setup guide */}
+      <div className="mb-4">
+        <button
+          onClick={() => setShowGuide(!showGuide)}
+          className="flex items-center gap-1.5 text-xs text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 transition-colors"
+        >
+          <BookOpen size={13} />
+          {t('ads.setup_guide_toggle')}
+          <ChevronDown size={13} className={`transition-transform ${showGuide ? 'rotate-180' : ''}`} />
+        </button>
+        {showGuide && (
+          <div className="mt-3 p-4 rounded-lg bg-blue-50/70 dark:bg-blue-500/5 border border-blue-200 dark:border-blue-800/40 space-y-3">
+            {[1, 2, 3, 4, 5].map(n => (
+              <div key={n}>
+                <p className="text-xs font-semibold text-blue-800 dark:text-blue-300">
+                  {t(`ads.setup_guide_step${n}_title` as 'ads.setup_guide_step1_title')}
+                </p>
+                <p className="text-[11px] text-blue-700 dark:text-blue-400 leading-relaxed mt-0.5">
+                  {t(`ads.setup_guide_step${n}` as 'ads.setup_guide_step1')}
+                </p>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 mb-4">
+        <div>
+          <label className="text-[10px] text-gray-500 dark:text-neutral-500 uppercase tracking-wider">{t('ads.customer_id')}</label>
+          <input value={form.customer_id} onChange={e => setForm({ ...form, customer_id: e.target.value })} placeholder={t('ads.customer_id_placeholder')} className={inputClass} />
+        </div>
+        <div>
+          <label className="text-[10px] text-gray-500 dark:text-neutral-500 uppercase tracking-wider">{t('ads.developer_token')}</label>
+          <input type="password" value={form.developer_token} onChange={e => setForm({ ...form, developer_token: e.target.value })} placeholder={t('ads.developer_token_placeholder')} className={inputClass} />
+        </div>
+        <div>
+          <label className="text-[10px] text-gray-500 dark:text-neutral-500 uppercase tracking-wider">{t('ads.client_id')}</label>
+          <input value={form.client_id} onChange={e => setForm({ ...form, client_id: e.target.value })} placeholder={t('ads.client_id_placeholder')} className={inputClass} />
+        </div>
+        <div>
+          <label className="text-[10px] text-gray-500 dark:text-neutral-500 uppercase tracking-wider">{t('ads.client_secret')}</label>
+          <input type="password" value={form.client_secret} onChange={e => setForm({ ...form, client_secret: e.target.value })} placeholder={t('ads.client_secret_placeholder')} className={inputClass} />
+        </div>
+        <div className="md:col-span-2">
+          <label className="text-[10px] text-gray-500 dark:text-neutral-500 uppercase tracking-wider">{t('ads.refresh_token')}</label>
+          <input type="password" value={form.refresh_token} onChange={e => setForm({ ...form, refresh_token: e.target.value })} placeholder={t('ads.refresh_token_placeholder')} className={inputClass} />
+        </div>
+      </div>
+
+      {testResult && (
+        <div className={`flex items-center gap-2 p-2 mb-3 rounded-lg text-xs ${
+          testResult.success
+            ? 'bg-emerald-50 dark:bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+            : 'bg-red-50 dark:bg-red-500/10 text-red-600 dark:text-red-400'
+        }`}>
+          {testResult.success ? <CheckCircle size={14} /> : <AlertCircle size={14} />}
+          {testResult.message}
+        </div>
+      )}
+
+      <div className="flex items-center gap-2">
+        <button onClick={handleSave} disabled={saving} className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-medium bg-blue-600 text-white hover:bg-blue-700 transition-colors disabled:opacity-50">
+          {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
+          {saving ? t('ads.saving_config') : t('ads.save_config')}
+        </button>
+        <button onClick={handleTest} disabled={testing} className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-medium bg-white dark:bg-neutral-800 border border-gray-200 dark:border-neutral-700 text-gray-700 dark:text-neutral-300 hover:bg-gray-50 dark:hover:bg-neutral-700 transition-colors disabled:opacity-50">
+          {testing ? <Loader2 size={12} className="animate-spin" /> : <Zap size={12} />}
+          {testing ? t('ads.testing_connection') : t('ads.test_connection')}
+        </button>
       </div>
     </div>
   )
@@ -1038,10 +1412,18 @@ const CTA_OPTIONS = [
 
 function AdCreatorWizard({ onClose, queryClient }: { onClose: () => void; queryClient: ReturnType<typeof useQueryClient> }) {
   const { t } = useTranslation()
+  const [creatorMode, setCreatorMode] = useState<'instagram' | 'upload'>('instagram')
   const [step, setStep] = useState(1)
   const [posts, setPosts] = useState<IgPost[]>([])
   const [loadingPosts, setLoadingPosts] = useState(true)
   const [selectedPost, setSelectedPost] = useState<IgPost | null>(null)
+  // Upload mode state
+  const [uploadFile, setUploadFile] = useState<File | null>(null)
+  const [uploadPreview, setUploadPreview] = useState<string | null>(null)
+  const [uploadBase64, setUploadBase64] = useState<string | null>(null)
+  const [adCaption, setAdCaption] = useState('')
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
   const [destinationUrl, setDestinationUrl] = useState('')
   const [strategy, setStrategy] = useState<AiStrategy | null>(null)
   const [loadingStrategy, setLoadingStrategy] = useState(false)
@@ -1069,20 +1451,36 @@ function AdCreatorWizard({ onClose, queryClient }: { onClose: () => void; queryC
     })()
   }, [])
 
+  const handleFileChange = (e: { target: HTMLInputElement }) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setUploadFile(file)
+    const reader = new FileReader()
+    reader.onload = ev => {
+      const dataUrl = ev.target?.result as string
+      setUploadPreview(dataUrl)
+      // Strip "data:image/...;base64," prefix — Meta wants raw base64
+      setUploadBase64(dataUrl.split(',')[1])
+    }
+    reader.readAsDataURL(file)
+  }
+
   const generateStrategy = async () => {
-    if (!selectedPost) return
     setLoadingStrategy(true)
     setError(null)
     try {
+      const caption = creatorMode === 'instagram'
+        ? (selectedPost?.caption || '')
+        : adCaption
       const res = await adsAction('/ai-strategy', 'POST', {
-        post_caption: selectedPost.caption || '',
-        post_type: selectedPost.media_type,
-        post_engagement: {
-          likes: selectedPost.like_count,
-          comments: selectedPost.comments_count,
-          reach: selectedPost.reach,
-          impressions: selectedPost.impressions,
-        },
+        post_caption: caption,
+        post_type: creatorMode === 'instagram' ? selectedPost?.media_type : 'IMAGE',
+        post_engagement: creatorMode === 'instagram' ? {
+          likes: selectedPost?.like_count || 0,
+          comments: selectedPost?.comments_count || 0,
+          reach: selectedPost?.reach || 0,
+          impressions: selectedPost?.impressions || 0,
+        } : { likes: 0, comments: 0, reach: 0, impressions: 0 },
       })
       if (res.error) {
         setError(res.error)
@@ -1104,7 +1502,9 @@ function AdCreatorWizard({ onClose, queryClient }: { onClose: () => void; queryC
   }
 
   const launchCampaign = async () => {
-    if (!selectedPost || !strategy) return
+    if (creatorMode === 'instagram' && !selectedPost) return
+    if (creatorMode === 'upload' && !uploadBase64) return
+    if (!strategy) return
     setLaunching(true)
     setError(null)
     try {
@@ -1130,8 +1530,11 @@ function AdCreatorWizard({ onClose, queryClient }: { onClose: () => void; queryC
         }]
       }
 
-      const createRes = await adsAction('/create-from-post', 'POST', {
-        ig_media_id: selectedPost.media_id,
+      const isUpload = creatorMode === 'upload'
+      const createRes = await adsAction(isUpload ? '/create-from-upload' : '/create-from-post', 'POST', {
+        ...(isUpload
+          ? { image_base64: uploadBase64, image_name: uploadFile?.name || 'ad.jpg', ad_message: adCaption }
+          : { ig_media_id: selectedPost!.media_id }),
         destination_url: destinationUrl,
         campaign_name: editName,
         daily_budget: editBudget,
@@ -1212,59 +1615,139 @@ function AdCreatorWizard({ onClose, queryClient }: { onClose: () => void; queryC
         </div>
       )}
 
-      {/* Step 1: Select Post */}
+      {/* Step 1: Select creative source */}
       {step === 1 && (
         <div>
-          <p className="text-xs text-gray-500 dark:text-neutral-400 mb-3">{t('ads.select_post_hint')}</p>
-          {loadingPosts ? (
-            <div className="flex items-center justify-center py-12">
-              <Loader2 className="animate-spin text-purple-500" size={28} />
-            </div>
-          ) : posts.length === 0 ? (
-            <p className="text-sm text-gray-400 dark:text-neutral-500 text-center py-8">{t('ads.no_posts')}</p>
-          ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 max-h-[420px] overflow-y-auto pr-1">
-              {posts.map(post => (
-                <button
-                  key={post.media_id}
-                  onClick={() => setSelectedPost(post)}
-                  className={`text-left rounded-xl overflow-hidden border-2 transition-all hover:shadow-md ${
-                    selectedPost?.media_id === post.media_id
-                      ? 'border-purple-500 ring-2 ring-purple-500/30 shadow-lg'
-                      : 'border-gray-200 dark:border-neutral-800 hover:border-gray-300 dark:hover:border-neutral-700'
-                  }`}
-                >
-                  {post.thumbnail_url ? (
-                    <img src={post.thumbnail_url} alt="" className="w-full h-36 object-cover" />
-                  ) : (
-                    <div className="w-full h-36 bg-gray-100 dark:bg-neutral-800 flex items-center justify-center">
-                      <Image size={24} className="text-gray-300 dark:text-neutral-600" />
-                    </div>
-                  )}
-                  <div className="p-2">
-                    <p className="text-[11px] text-gray-700 dark:text-neutral-300 line-clamp-2 leading-tight">
-                      {post.caption?.substring(0, 80) || '-'}
-                    </p>
-                    <div className="flex items-center gap-3 mt-1.5">
-                      <span className="text-[10px] text-gray-400 dark:text-neutral-500">{post.like_count} {t('ads.likes')}</span>
-                      <span className="text-[10px] text-gray-400 dark:text-neutral-500">{post.comments_count} {t('ads.comments_count')}</span>
-                    </div>
-                    <span className={`inline-block mt-1 text-[9px] px-1.5 py-0.5 rounded font-medium ${
-                      post.media_type === 'VIDEO' || post.media_type === 'REELS'
-                        ? 'bg-red-50 dark:bg-red-500/10 text-red-500'
-                        : post.media_type === 'CAROUSEL_ALBUM'
-                          ? 'bg-blue-50 dark:bg-blue-500/10 text-blue-500'
-                          : 'bg-gray-100 dark:bg-neutral-800 text-gray-500 dark:text-neutral-400'
-                    }`}>{post.media_type}</span>
+          {/* Mode toggle */}
+          <div className="flex gap-2 mb-4 p-1 bg-gray-100 dark:bg-neutral-800 rounded-xl w-fit">
+            {(['instagram', 'upload'] as const).map(m => (
+              <button
+                key={m}
+                onClick={() => { setCreatorMode(m); setSelectedPost(null); setUploadFile(null); setUploadPreview(null); setUploadBase64(null) }}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                  creatorMode === m
+                    ? 'bg-white dark:bg-neutral-700 text-gray-900 dark:text-white shadow-sm'
+                    : 'text-gray-500 dark:text-neutral-400 hover:text-gray-700 dark:hover:text-neutral-200'
+                }`}
+              >
+                {m === 'instagram' ? <Image size={13} /> : <ArrowUpRight size={13} />}
+                {t(m === 'instagram' ? 'ads.creator_mode_instagram' : 'ads.creator_mode_upload')}
+              </button>
+            ))}
+          </div>
+
+          {/* Instagram post grid */}
+          {creatorMode === 'instagram' && (
+            <>
+              <p className="text-xs text-gray-500 dark:text-neutral-400 mb-3">{t('ads.select_post_hint')}</p>
+              {loadingPosts ? (
+                <div className="flex items-center justify-center py-12">
+                  <Loader2 className="animate-spin text-purple-500" size={28} />
+                </div>
+              ) : posts.length === 0 ? (
+                <p className="text-sm text-gray-400 dark:text-neutral-500 text-center py-8">{t('ads.no_posts')}</p>
+              ) : (
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 max-h-[420px] overflow-y-auto pr-1">
+                  {posts.map(post => (
+                    <button
+                      key={post.media_id}
+                      onClick={() => setSelectedPost(post)}
+                      className={`text-left rounded-xl overflow-hidden border-2 transition-all hover:shadow-md ${
+                        selectedPost?.media_id === post.media_id
+                          ? 'border-purple-500 ring-2 ring-purple-500/30 shadow-lg'
+                          : 'border-gray-200 dark:border-neutral-800 hover:border-gray-300 dark:hover:border-neutral-700'
+                      }`}
+                    >
+                      {post.thumbnail_url ? (
+                        <img src={post.thumbnail_url} alt="" className="w-full h-36 object-cover" />
+                      ) : (
+                        <div className="w-full h-36 bg-gray-100 dark:bg-neutral-800 flex items-center justify-center">
+                          <Image size={24} className="text-gray-300 dark:text-neutral-600" />
+                        </div>
+                      )}
+                      <div className="p-2">
+                        <p className="text-[11px] text-gray-700 dark:text-neutral-300 line-clamp-2 leading-tight">
+                          {post.caption?.substring(0, 80) || '-'}
+                        </p>
+                        <div className="flex items-center gap-3 mt-1.5">
+                          <span className="text-[10px] text-gray-400 dark:text-neutral-500">{post.like_count} {t('ads.likes')}</span>
+                          <span className="text-[10px] text-gray-400 dark:text-neutral-500">{post.comments_count} {t('ads.comments_count')}</span>
+                        </div>
+                        <span className={`inline-block mt-1 text-[9px] px-1.5 py-0.5 rounded font-medium ${
+                          post.media_type === 'VIDEO' || post.media_type === 'REELS'
+                            ? 'bg-red-50 dark:bg-red-500/10 text-red-500'
+                            : post.media_type === 'CAROUSEL_ALBUM'
+                              ? 'bg-blue-50 dark:bg-blue-500/10 text-blue-500'
+                              : 'bg-gray-100 dark:bg-neutral-800 text-gray-500 dark:text-neutral-400'
+                        }`}>{post.media_type}</span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+
+          {/* Upload from PC */}
+          {creatorMode === 'upload' && (
+            <div className="space-y-3">
+              {/* Drop zone / file picker */}
+              <div
+                onClick={() => fileInputRef.current?.click()}
+                className={`relative flex flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed cursor-pointer transition-all ${
+                  uploadPreview
+                    ? 'border-purple-400 dark:border-purple-600 p-2'
+                    : 'border-gray-300 dark:border-neutral-700 hover:border-purple-400 dark:hover:border-purple-600 py-10'
+                }`}
+              >
+                {uploadPreview ? (
+                  <div className="relative w-full">
+                    <img src={uploadPreview} alt={t('ads.upload_preview')} className="w-full max-h-52 object-contain rounded-lg" />
+                    <button
+                      onClick={e => { e.stopPropagation(); setUploadFile(null); setUploadPreview(null); setUploadBase64(null) }}
+                      className="absolute top-1 right-1 p-1 rounded-full bg-black/50 text-white hover:bg-black/70"
+                    >
+                      <X size={12} />
+                    </button>
                   </div>
-                </button>
-              ))}
+                ) : (
+                  <>
+                    <div className="w-12 h-12 rounded-xl bg-purple-50 dark:bg-purple-500/10 flex items-center justify-center">
+                      <Image size={24} className="text-purple-500" />
+                    </div>
+                    <div className="text-center">
+                      <p className="text-sm font-medium text-gray-700 dark:text-neutral-300">{t('ads.upload_image')}</p>
+                      <p className="text-xs text-gray-400 dark:text-neutral-500 mt-0.5">{t('ads.upload_image_hint')}</p>
+                    </div>
+                  </>
+                )}
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/jpeg,image/png,image/gif"
+                  onChange={handleFileChange}
+                  className="hidden"
+                />
+              </div>
+
+              {/* Optional caption */}
+              <div>
+                <label className="block text-xs font-medium text-gray-500 dark:text-neutral-400 mb-1.5">{t('ads.ad_caption')}</label>
+                <textarea
+                  rows={2}
+                  value={adCaption}
+                  onChange={e => setAdCaption(e.target.value)}
+                  placeholder={t('ads.ad_caption_placeholder')}
+                  className="w-full px-3 py-2 text-sm bg-white dark:bg-neutral-800 border border-gray-200 dark:border-neutral-700 rounded-xl text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-purple-500/40 resize-none"
+                />
+              </div>
             </div>
           )}
+
           <div className="flex justify-end mt-4">
             <button
               onClick={() => setStep(2)}
-              disabled={!selectedPost}
+              disabled={creatorMode === 'instagram' ? !selectedPost : !uploadBase64}
               className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-sm font-medium bg-purple-600 text-white hover:bg-purple-700 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
             >
               {t('ads.step_destination')} <ChevronRight size={15} />
@@ -1276,7 +1759,8 @@ function AdCreatorWizard({ onClose, queryClient }: { onClose: () => void; queryC
       {/* Step 2: Destination URL */}
       {step === 2 && (
         <div>
-          {selectedPost && (
+          {/* Creative preview */}
+          {creatorMode === 'instagram' && selectedPost && (
             <div className="flex items-start gap-3 mb-4 p-3 rounded-xl bg-gray-50 dark:bg-neutral-800/50">
               {selectedPost.thumbnail_url && (
                 <img src={selectedPost.thumbnail_url} alt="" className="w-16 h-16 object-cover rounded-lg shrink-0" />
@@ -1284,6 +1768,16 @@ function AdCreatorWizard({ onClose, queryClient }: { onClose: () => void; queryC
               <div>
                 <p className="text-xs font-medium text-gray-700 dark:text-neutral-300">{t('ads.selected_post')}</p>
                 <p className="text-[11px] text-gray-500 dark:text-neutral-400 line-clamp-2 mt-0.5">{selectedPost.caption?.substring(0, 120)}</p>
+              </div>
+            </div>
+          )}
+          {creatorMode === 'upload' && uploadPreview && (
+            <div className="flex items-start gap-3 mb-4 p-3 rounded-xl bg-gray-50 dark:bg-neutral-800/50">
+              <img src={uploadPreview} alt={t('ads.upload_preview')} className="w-16 h-16 object-cover rounded-lg shrink-0" />
+              <div>
+                <p className="text-xs font-medium text-gray-700 dark:text-neutral-300">{t('ads.creator_mode_upload')}</p>
+                <p className="text-[11px] text-gray-500 dark:text-neutral-400 mt-0.5">{uploadFile?.name}</p>
+                {adCaption && <p className="text-[11px] text-gray-400 dark:text-neutral-500 line-clamp-2 mt-0.5">{adCaption.substring(0, 100)}</p>}
               </div>
             </div>
           )}

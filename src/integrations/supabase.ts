@@ -319,7 +319,58 @@ export type Database = {
           details: Record<string, unknown>
           status: string
           error_message: string | null
+          platform: string
           created_at: string
+        }
+      }
+      google_ads_campaigns: {
+        Row: {
+          id: string
+          campaign_id: string
+          customer_id: string
+          name: string
+          status: string
+          campaign_type: string | null
+          bidding_strategy: string | null
+          daily_budget: number
+          cost: number
+          impressions: number
+          clicks: number
+          conversions: number
+          cpc: number
+          cpm: number
+          ctr: number
+          cost_per_conversion: number
+          search_impression_share: number | null
+          last_synced_at: string
+          created_at: string
+        }
+      }
+      google_ads_daily: {
+        Row: {
+          id: string
+          date: string
+          customer_id: string
+          total_cost: number
+          total_impressions: number
+          total_clicks: number
+          total_conversions: number
+          active_campaigns: number
+          created_at: string
+        }
+      }
+      google_ads_config: {
+        Row: {
+          id: string
+          customer_id: string | null
+          client_id: string | null
+          client_secret: string | null
+          refresh_token: string | null
+          developer_token: string | null
+          is_connected: boolean
+          last_token_refresh: string | null
+          created_at: string
+          updated_at: string
         }
       }
       ads_optimization_config: {

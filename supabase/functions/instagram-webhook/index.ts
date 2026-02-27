@@ -4,7 +4,7 @@ import { getServiceClient, jsonResponse, corsHeaders } from '../_shared/supabase
 // Instagram Graph API now uses Facebook Graph API endpoints
 const IG_API = 'https://graph.facebook.com/v21.0'
 const FB_API = 'https://graph.facebook.com/v21.0'
-const GEMINI_API = 'https://generativelanguage.googleapis.com/v1beta/models'
+import { GEMINI_API, GEMINI_MODEL } from '../_shared/gemini.ts'
 
 serve(async (req) => {
   // --- CORS preflight ---
@@ -285,15 +285,14 @@ async function processComment(
       })
 
       // 7. Upsert lead for this commenter
-      try {
-        await supabase.rpc('upsert_lead', {
-          p_username: comment.username,
-          p_ig_user_id: null,
-          p_source: 'automation_comment',
-          p_source_automation_id: automation.id,
-        })
-      } catch (e) {
-        console.error('[WEBHOOK] Lead upsert error:', e instanceof Error ? e.message : e)
+      const { error: leadErr } = await supabase.rpc('upsert_lead', {
+        p_username: comment.username,
+        p_ig_user_id: null,
+        p_source: 'automation_comment',
+        p_source_automation_id: automation.id,
+      })
+      if (leadErr) {
+        console.error('[WEBHOOK] Lead upsert error:', leadErr.message)
       }
 
       console.log(`[WEBHOOK] Done processing comment ${comment.commentId}: action=${actionTaken}, status=${status}`)
@@ -420,14 +419,13 @@ async function processMessage(
     }
 
     // Also upsert lead from DM interaction
-    try {
-      await supabase.rpc('upsert_lead', {
-        p_username: senderUsername || conversation.ig_username || senderId,
-        p_ig_user_id: senderId,
-        p_source: 'dm',
-      })
-    } catch (e) {
-      console.error('Lead upsert error:', e instanceof Error ? e.message : e)
+    const { error: dmLeadErr } = await supabase.rpc('upsert_lead', {
+      p_username: senderUsername || conversation.ig_username || senderId,
+      p_ig_user_id: senderId,
+      p_source: 'dm',
+    })
+    if (dmLeadErr) {
+      console.error('DM Lead upsert error:', dmLeadErr.message)
     }
 
     // 4. Get conversation history
@@ -446,32 +444,46 @@ async function processMessage(
     let products: Array<Record<string, unknown>> = []
     let lead: Record<string, unknown> | null = null
 
+    // Fetch lead for ALL agent types (needed for temperature/status classification)
+    const { data: leadRow } = await supabase
+      .from('instagram_leads')
+      .select('*')
+      .eq('ig_user_id', senderId)
+      .maybeSingle()
+
+    if (!leadRow) {
+      // Try by username
+      const { data: leadByName } = await supabase
+        .from('instagram_leads')
+        .select('*')
+        .eq('username', conversation.ig_username || senderId)
+        .maybeSingle()
+      lead = leadByName
+    } else {
+      lead = leadRow
+    }
+
+    // Load global knowledge base and merge into config
+    const { data: knowledgeDocs } = await supabase
+      .from('ai_knowledge_base')
+      .select('name, content')
+      .order('created_at', { ascending: true })
+
+    if (knowledgeDocs && knowledgeDocs.length > 0) {
+      const kbText = knowledgeDocs.map((d: { name: string; content: string }) => `--- ${d.name} ---\n${d.content}`).join('\n\n')
+      config.knowledge_base = config.knowledge_base
+        ? `${config.knowledge_base}\n\n${kbText}`
+        : kbText
+    }
+
     if (isSalesAgent) {
-      // Fetch products and lead for sales context
+      // Fetch products for sales context
       const { data: productRows } = await supabase
         .from('products')
         .select('*')
         .eq('is_active', true)
 
       products = productRows || []
-
-      const { data: leadRow } = await supabase
-        .from('instagram_leads')
-        .select('*')
-        .eq('ig_user_id', senderId)
-        .maybeSingle()
-
-      if (!leadRow) {
-        // Try by username
-        const { data: leadByName } = await supabase
-          .from('instagram_leads')
-          .select('*')
-          .eq('username', conversation.ig_username || senderId)
-          .maybeSingle()
-        lead = leadByName
-      } else {
-        lead = leadRow
-      }
 
       systemInstruction = buildSalesInstruction(config, products, lead)
     } else {
@@ -481,7 +493,7 @@ async function processMessage(
     const contents = buildContents(historyRows || [], messageText)
 
     // 6. Call Gemini API
-    const geminiModel = config.gemini_model === 'gemini-2.0-flash' ? 'gemini-2.5-flash' : (config.gemini_model || 'gemini-2.5-flash')
+    const geminiModel = config.gemini_model || GEMINI_MODEL
     const geminiResult = await callGemini(geminiKey, geminiModel, systemInstruction, contents)
 
     if (!geminiResult.text) {
@@ -500,70 +512,83 @@ async function processMessage(
 
     const aiResponse = geminiResult.text
 
-    // 7. Process response (sales agents return JSON, support returns plain text)
+    // 7. Process response (both agents return JSON with lead_update)
     let messageToSend = aiResponse
     let leadUpdate: Record<string, unknown> | null = null
     let sendProductId: string | null = null
 
-    if (isSalesAgent) {
-      try {
-        // Strip markdown code fences if present
-        const cleaned = aiResponse.replace(/```json\s*/gi, '').replace(/```\s*/gi, '').trim()
-        const parsed = JSON.parse(cleaned)
+    try {
+      // Strip markdown code fences if present
+      const cleaned = aiResponse.replace(/```json\s*/gi, '').replace(/```\s*/gi, '').trim()
+      const parsed = JSON.parse(cleaned)
 
-        if (parsed.message) {
-          messageToSend = parsed.message
-        }
-        if (parsed.lead_update) {
-          leadUpdate = parsed.lead_update as Record<string, unknown>
-        }
-        if (parsed.send_product) {
-          sendProductId = parsed.send_product as string
-        }
-      } catch {
-        // If JSON parsing fails, use raw response as message
-        console.log('[WEBHOOK] Sales agent response is not JSON, using as plain text')
-        messageToSend = aiResponse
+      if (parsed.message) {
+        messageToSend = parsed.message
       }
+      if (parsed.lead_update) {
+        leadUpdate = parsed.lead_update as Record<string, unknown>
+      }
+      if (parsed.send_product) {
+        sendProductId = parsed.send_product as string
+      }
+    } catch {
+      // If JSON parsing fails, use raw response as message
+      console.log('[WEBHOOK] Agent response is not JSON, using as plain text')
+      messageToSend = aiResponse
     }
 
     // 8. Send reply via Instagram API
     const sendResult = await sendInstagramMessage(accessToken, senderId, messageToSend)
     const sent = sendResult.success
 
-    // 8.5 Handle sales agent actions
-    if (isSalesAgent && lead) {
-      // Update lead temperature/status if AI suggested it
-      if (leadUpdate) {
-        const updateData: Record<string, unknown> = { updated_at: new Date().toISOString() }
-        if (leadUpdate.temperature && ['hot', 'warm', 'cold'].includes(leadUpdate.temperature as string)) {
-          updateData.temperature = leadUpdate.temperature
-          updateData.temperature_override = true // AI override counts as manual
-        }
-        if (leadUpdate.status && ['new', 'contacted', 'negotiating', 'converted', 'lost'].includes(leadUpdate.status as string)) {
-          updateData.status = leadUpdate.status
-        }
-        await supabase.from('instagram_leads').update(updateData).eq('id', lead.id)
+    // 8.5 Update lead temperature/status from AI classification
+    if (leadUpdate && lead) {
+      const updateData: Record<string, unknown> = { updated_at: new Date().toISOString() }
+      if (leadUpdate.temperature && ['hot', 'warm', 'cold'].includes(leadUpdate.temperature as string)) {
+        updateData.temperature = leadUpdate.temperature
+        updateData.temperature_override = true // AI classification takes priority over SQL rules
+      }
+      if (leadUpdate.status && ['new', 'contacted', 'negotiating', 'converted', 'lost'].includes(leadUpdate.status as string)) {
+        updateData.status = leadUpdate.status
+      }
+      const { error: leadUpErr } = await supabase.from('instagram_leads').update(updateData).eq('id', lead.id)
+      if (leadUpErr) {
+        console.error(`[WEBHOOK] Lead update error:`, leadUpErr.message)
+      } else {
         console.log(`[WEBHOOK] Lead ${lead.id} updated:`, JSON.stringify(updateData))
       }
+    } else if (leadUpdate && !lead) {
+      // Lead doesn't exist yet (first DM) - try to find by username and update
+      const username = conversation.ig_username || senderId
+      const { error: leadUpErr } = await supabase.from('instagram_leads').update({
+        temperature: leadUpdate.temperature || 'warm',
+        temperature_override: true,
+        status: leadUpdate.status || 'contacted',
+        updated_at: new Date().toISOString(),
+      }).eq('username', username)
+      if (leadUpErr) {
+        console.error(`[WEBHOOK] Lead update by username error:`, leadUpErr.message)
+      } else {
+        console.log(`[WEBHOOK] Lead @${username} updated by AI classification`)
+      }
+    }
 
-      // Send tracked product link if AI requested it
-      if (sendProductId) {
-        const product = products.find(p => p.id === sendProductId || p.name === sendProductId)
-        if (product) {
-          const trackedLink = `${product.payment_link}${(product.payment_link as string).includes('?') ? '&' : '?'}ref=${lead.id}`
-          await sendInstagramMessage(accessToken, senderId, trackedLink)
+    // 8.6 Handle sales agent product link
+    if (isSalesAgent && lead && sendProductId) {
+      const product = products.find(p => p.id === sendProductId || p.name === sendProductId)
+      if (product) {
+        const trackedLink = `${product.payment_link}${(product.payment_link as string).includes('?') ? '&' : '?'}ref=${lead.id}`
+        await sendInstagramMessage(accessToken, senderId, trackedLink)
 
-          // Update lead tracking info
-          await supabase.from('instagram_leads').update({
-            tracked_link_sent: true,
-            tracked_product_id: product.id,
-            status: 'negotiating',
-            updated_at: new Date().toISOString(),
-          }).eq('id', lead.id)
+        // Update lead tracking info
+        await supabase.from('instagram_leads').update({
+          tracked_link_sent: true,
+          tracked_product_id: product.id,
+          status: 'negotiating',
+          updated_at: new Date().toISOString(),
+        }).eq('id', lead.id)
 
-          console.log(`[WEBHOOK] Tracked link sent to ${senderId}: ${trackedLink}`)
-        }
+        console.log(`[WEBHOOK] Tracked link sent to ${senderId}: ${trackedLink}`)
       }
     }
 
@@ -612,6 +637,23 @@ function buildSystemInstruction(config: Record<string, unknown>): string {
   parts.push('- Se nao souber a resposta, diga que vai encaminhar para atendimento humano')
   parts.push('- Mantenha respostas curtas e diretas (maximo 500 caracteres)')
   parts.push('- Nao use markdown, apenas texto simples')
+
+  // Lead classification for support agent
+  parts.push(`\n\n## FORMATO DE RESPOSTA (OBRIGATORIO)
+Voce DEVE responder SEMPRE com um JSON valido neste formato. NADA fora do JSON.
+
+{"message": "sua resposta aqui", "lead_update": {"temperature": "warm", "status": "contacted"}}
+
+CAMPOS:
+- "message" (OBRIGATORIO): Sua resposta em texto puro, sem markdown
+- "lead_update" (pode ser null): Classificacao do interesse da pessoa:
+  - temperature: "hot" = muito interessado/engajado, "warm" = curioso/fazendo perguntas, "cold" = desinteressado/reclamando
+  - status: "contacted" = esta conversando, "negotiating" = demonstrou interesse forte, "lost" = desistiu/irritado
+
+EXEMPLOS:
+Pessoa perguntando sobre servico: {"message": "opa, tudo bem! sim, a gente oferece esse servico. me conta mais sobre o que voce precisa", "lead_update": {"temperature": "warm", "status": "contacted"}}
+Pessoa elogiando/muito engajada: {"message": "que bom que curtiu! qualquer duvida me chama", "lead_update": {"temperature": "hot", "status": "contacted"}}
+Pessoa reclamando/sem interesse: {"message": "entendo, vou encaminhar pro nosso time verificar isso", "lead_update": {"temperature": "cold", "status": "contacted"}}`)
 
   return parts.join('\n')
 }

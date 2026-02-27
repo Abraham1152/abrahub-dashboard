@@ -207,16 +207,22 @@ serve(async (req) => {
           })
 
           // Upsert lead for this commenter
-          try {
-            await supabase.rpc('upsert_lead', {
-              p_username: username,
-              p_ig_user_id: null,
-              p_source: 'automation_comment',
-              p_source_automation_id: automation.id,
-            })
-          } catch (e) {
-            // Non-critical, don't fail the automation
-            console.error('Lead upsert error:', e instanceof Error ? e.message : e)
+          const { error: leadErr } = await supabase.rpc('upsert_lead', {
+            p_username: username,
+            p_ig_user_id: null,
+            p_source: 'automation_comment',
+            p_source_automation_id: automation.id,
+          })
+          if (leadErr) {
+            console.error('Lead upsert error:', leadErr.message)
+          }
+
+          // Auto-update status to 'contacted' when DM was successfully sent
+          if (actionTaken.includes('dm')) {
+            await supabase.from('instagram_leads')
+              .update({ status: 'contacted', updated_at: new Date().toISOString() })
+              .eq('username', username)
+              .eq('status', 'new') // only upgrade from 'new', don't downgrade
           }
 
           processedSet.add(commentId)

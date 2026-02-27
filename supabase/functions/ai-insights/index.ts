@@ -1,7 +1,6 @@
 import { serve } from 'https://deno.land/std@0.208.0/http/server.ts'
 import { getServiceClient, jsonResponse, corsHeaders } from '../_shared/supabase-client.ts'
-
-const GEMINI_API = 'https://generativelanguage.googleapis.com/v1beta/models'
+import { GEMINI_API, GEMINI_MODEL } from '../_shared/gemini.ts'
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -60,6 +59,8 @@ serve(async (req) => {
       instagramPostsRes,
       adsRes,
       adsCampaignsRes,
+      googleAdsRes,
+      googleAdsCampaignsRes,
       expensesRes,
       okrsRes,
       transactionsRes,
@@ -72,6 +73,8 @@ serve(async (req) => {
       supabase.from('instagram_posts').select('media_type, caption, like_count, comments_count, reach, impressions, saves, shares, timestamp').order('like_count', { ascending: false }).limit(10),
       supabase.from('ads_daily').select('*').gte('date', sinceDateStr).order('date', { ascending: true }),
       supabase.from('ads_campaigns').select('name, status, objective, spend, impressions, clicks, cpc, cpm, ctr, conversions, cost_per_result').order('spend', { ascending: false }).limit(10),
+      supabase.from('google_ads_daily').select('*').gte('date', sinceDateStr).order('date', { ascending: true }),
+      supabase.from('google_ads_campaigns').select('name, status, campaign_type, cost, impressions, clicks, cpc, cpm, ctr, conversions, cost_per_conversion').order('cost', { ascending: false }).limit(10),
       supabase.from('monthly_expenses').select('*').in('month', uniqueMonths),
       supabase.from('okrs').select('*'),
       supabase.from('revenue_transactions').select('date, source, amount, type, status').gte('date', sinceDateStr).order('date', { ascending: false }).limit(1000),
@@ -87,6 +90,8 @@ serve(async (req) => {
       instagramPosts: (instagramPostsRes.data || []) as Array<Record<string, unknown>>,
       ads: adsRes.data || [],
       adsCampaigns: (adsCampaignsRes.data || []) as Array<Record<string, unknown>>,
+      googleAds: googleAdsRes.data || [],
+      googleAdsCampaigns: (googleAdsCampaignsRes.data || []) as Array<Record<string, unknown>>,
       expenses: expensesRes.data || [],
       okrs: okrsRes.data || [],
       transactions: transactionsRes.data || [],
@@ -155,7 +160,7 @@ ${businessData}${knowledgeContext}`
 
     // Call Gemini
     const res = await fetch(
-      `${GEMINI_API}/gemini-2.5-flash:generateContent?key=${geminiKey}`,
+      `${GEMINI_API}/${GEMINI_MODEL}:generateContent?key=${geminiKey}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -197,6 +202,8 @@ function buildBusinessContext(data: {
   instagramPosts: Array<Record<string, unknown>>
   ads: Array<Record<string, unknown>>
   adsCampaigns: Array<Record<string, unknown>>
+  googleAds: Array<Record<string, unknown>>
+  googleAdsCampaigns: Array<Record<string, unknown>>
   expenses: Array<Record<string, unknown>>
   okrs: Array<Record<string, unknown>>
   transactions: Array<Record<string, unknown>>
@@ -373,9 +380,51 @@ function buildBusinessContext(data: {
 
   // Top campaigns
   if (data.adsCampaigns.length > 0) {
-    parts.push(`- Top campanhas:`)
+    parts.push(`- Top campanhas Meta:`)
     for (const c of data.adsCampaigns.slice(0, 5)) {
       parts.push(`  - "${c.name}" [${c.status}]: R$ ${Number(c.spend || 0).toFixed(2)} gasto, ${c.clicks} cliques, ${c.conversions} conversoes, CPC R$ ${Number(c.cpc || 0).toFixed(2)}`)
+    }
+  }
+
+  // ===== ADS GOOGLE =====
+  if (data.googleAds.length > 0) {
+    const gTotalSpend = data.googleAds.reduce((s, r) => s + (Number(r.total_cost) || 0), 0)
+    const gTotalClicks = data.googleAds.reduce((s, r) => s + (Number(r.total_clicks) || 0), 0)
+    const gTotalImpressions = data.googleAds.reduce((s, r) => s + (Number(r.total_impressions) || 0), 0)
+    const gTotalConversions = data.googleAds.reduce((s, r) => s + (Number(r.total_conversions) || 0), 0)
+    const gAvgCPC = gTotalClicks > 0 ? gTotalSpend / gTotalClicks : 0
+    const gAvgCTR = gTotalImpressions > 0 ? (gTotalClicks / gTotalImpressions * 100) : 0
+    const gCostPerConversion = gTotalConversions > 0 ? gTotalSpend / gTotalConversions : 0
+    parts.push(`\nADS GOOGLE (${data.periodLabel}):
+- Gasto Total: R$ ${gTotalSpend.toFixed(2)}
+- Impressoes: ${gTotalImpressions.toLocaleString('pt-BR')}
+- Cliques: ${gTotalClicks.toLocaleString('pt-BR')}
+- CTR medio: ${gAvgCTR.toFixed(2)}%
+- CPC medio: R$ ${gAvgCPC.toFixed(2)}
+- Conversoes: ${gTotalConversions}
+- Custo por conversao: R$ ${gCostPerConversion.toFixed(2)}`)
+  }
+
+  // Top Google campaigns
+  if (data.googleAdsCampaigns.length > 0) {
+    parts.push(`- Top campanhas Google:`)
+    for (const c of data.googleAdsCampaigns.slice(0, 5)) {
+      parts.push(`  - "${c.name}" [${c.status}] (${c.campaign_type}): R$ ${Number(c.cost || 0).toFixed(2)} gasto, ${c.clicks} cliques, ${c.conversions} conversoes, CPC R$ ${Number(c.cpc || 0).toFixed(2)}`)
+    }
+  }
+
+  // ===== ADS COMBINADO =====
+  if (data.ads.length > 0 || data.googleAds.length > 0) {
+    const metaSpend = data.ads.reduce((s, r) => s + (Number(r.total_spend) || 0), 0)
+    const googleSpend = data.googleAds.reduce((s, r) => s + (Number(r.total_cost) || 0), 0)
+    const combinedSpend = metaSpend + googleSpend
+    if (combinedSpend > 0) {
+      const metaPct = ((metaSpend / combinedSpend) * 100).toFixed(0)
+      const googlePct = ((googleSpend / combinedSpend) * 100).toFixed(0)
+      parts.push(`\nADS COMBINADO:
+- Gasto total (Meta + Google): R$ ${combinedSpend.toFixed(2)}
+- Meta Ads: R$ ${metaSpend.toFixed(2)} (${metaPct}%)
+- Google Ads: R$ ${googleSpend.toFixed(2)} (${googlePct}%)`)
     }
   }
 

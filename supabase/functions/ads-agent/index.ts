@@ -1,7 +1,6 @@
 import { serve } from 'https://deno.land/std@0.208.0/http/server.ts'
 import { getServiceClient, jsonResponse, corsHeaders } from '../_shared/supabase-client.ts'
-
-const GEMINI_API = 'https://generativelanguage.googleapis.com/v1beta/models'
+import { GEMINI_API, GEMINI_MODEL } from '../_shared/gemini.ts'
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -26,34 +25,48 @@ serve(async (req) => {
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30)
     const since30d = thirtyDaysAgo.toISOString().split('T')[0]
 
-    // Fetch all ads and business data in parallel
+    // Fetch all ads and business data in parallel (Meta + Google)
     const [
       campaignsRes,
       adsRes,
+      googleCampaignsRes,
+      googleAdsRes,
       churnRes,
       revenueRes,
       configRes,
       actionsRes,
+      knowledgeRes,
     ] = await Promise.all([
       supabase.from('ads_campaigns').select('*').order('spend', { ascending: false }),
       supabase.from('ads_daily').select('*').gte('date', since30d).order('date', { ascending: true }),
+      supabase.from('google_ads_campaigns').select('*').order('cost', { ascending: false }),
+      supabase.from('google_ads_daily').select('*').gte('date', since30d).order('date', { ascending: true }),
       supabase.from('churn_metrics').select('*').order('date', { ascending: false }).limit(1),
       supabase.from('revenue_transactions').select('date, source, amount, type, status').gte('date', since30d).order('date', { ascending: false }).limit(100),
       supabase.from('ads_optimization_config').select('*').single(),
       supabase.from('ads_agent_actions').select('*').order('created_at', { ascending: false }).limit(20),
+      supabase.from('ai_knowledge_base').select('name, content').order('created_at', { ascending: true }),
     ])
 
     const campaigns = campaignsRes.data || []
     const ads = adsRes.data || []
+    const googleCampaigns = googleCampaignsRes.data || []
+    const googleAds = googleAdsRes.data || []
     const churn = churnRes.data?.[0] || null
     const transactions = revenueRes.data || []
     const config = configRes.data || null
     const actions = actionsRes.data || []
+    const knowledgeDocs = knowledgeRes.data || []
+    const knowledgeContext = knowledgeDocs.length > 0
+      ? `\n\nBASE DE CONHECIMENTO DO NEGOCIO:\n` + knowledgeDocs.map((d: { name: string; content: string }) => `--- ${d.name} ---\n${d.content}`).join('\n\n')
+      : ''
 
-    // Build business context
+    // Build business context (Meta + Google combined)
     const businessData = buildAdsContext({
       campaigns,
       ads,
+      googleCampaigns,
+      googleAds,
       churn,
       transactions,
       config,
@@ -63,7 +76,7 @@ serve(async (req) => {
     const targetCpa = config?.target_cpa ?? '??'
     const minRoas = config?.min_roas ?? '??'
 
-    const systemInstruction = `Voce e o Estrategista de Trafego Pago da ABRAhub Studio, especialista em Meta Ads para campanhas de conversao (vendas).
+    const systemInstruction = `Voce e o Estrategista de Trafego Pago da ABRAhub Studio, especialista em Meta Ads e Google Ads para campanhas de conversao (vendas).
 
 Voce tem acesso a TODOS os dados de campanhas, metricas financeiras e configuracoes de otimizacao.
 
@@ -86,7 +99,7 @@ REGRAS:
 - Seja conciso e direto. Maximo 8-10 bullet points por resposta
 
 DADOS DAS CAMPANHAS E NEGOCIO:
-${businessData}`
+${businessData}${knowledgeContext}`
 
     // Build conversation contents
     const contents: Array<{ role: string; parts: Array<{ text: string }> }> = []
@@ -109,7 +122,7 @@ ${businessData}`
 
     // Call Gemini
     const res = await fetch(
-      `${GEMINI_API}/gemini-2.5-flash:generateContent?key=${geminiKey}`,
+      `${GEMINI_API}/${GEMINI_MODEL}:generateContent?key=${geminiKey}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -148,6 +161,8 @@ ${businessData}`
 function buildAdsContext(data: {
   campaigns: Array<Record<string, unknown>>
   ads: Array<Record<string, unknown>>
+  googleCampaigns: Array<Record<string, unknown>>
+  googleAds: Array<Record<string, unknown>>
   churn: Record<string, unknown> | null
   transactions: Array<Record<string, unknown>>
   config: Record<string, unknown> | null
@@ -155,16 +170,16 @@ function buildAdsContext(data: {
 }): string {
   const parts: string[] = []
 
-  // ── Campaigns ──────────────────────────────────────────────────────────────
+  // ── Meta Ads Campaigns ─────────────────────────────────────────────────────
   if (data.campaigns.length > 0) {
-    parts.push(`CAMPANHAS (${data.campaigns.length} total):\n`)
+    parts.push(`META ADS CAMPANHAS (${data.campaigns.length} total):\n`)
     data.campaigns.forEach((c, i) => {
       const status = String(c.status || 'UNKNOWN').toUpperCase()
       const name = c.name || c.campaign_name || 'Sem nome'
       const spend = Number(c.spend) || 0
       const cpc = Number(c.cpc) || 0
       const ctr = Number(c.ctr) || 0
-      const cpa = Number(c.cpa) || 0
+      const cpa = Number(c.cost_per_result) || 0
       const impressions = Number(c.impressions) || 0
       const clicks = Number(c.clicks) || 0
       const conversions = Number(c.conversions) || 0
@@ -176,10 +191,33 @@ function buildAdsContext(data: {
    - Orcamento: R$ ${budget.toFixed(2)}/dia`)
     })
   } else {
-    parts.push('CAMPANHAS: Nenhuma campanha encontrada.')
+    parts.push('META ADS CAMPANHAS: Nenhuma campanha encontrada.')
   }
 
-  // ── Ads Daily Trend (aggregated) ───────────────────────────────────────────
+  // ── Google Ads Campaigns ───────────────────────────────────────────────────
+  if (data.googleCampaigns.length > 0) {
+    parts.push(`\nGOOGLE ADS CAMPANHAS (${data.googleCampaigns.length} total):\n`)
+    data.googleCampaigns.forEach((c, i) => {
+      const status = String(c.status || 'UNKNOWN').toUpperCase()
+      const name = c.name || 'Sem nome'
+      const cost = Number(c.cost) || 0
+      const cpc = Number(c.cpc) || 0
+      const ctr = Number(c.ctr) || 0
+      const cpa = Number(c.cost_per_conversion) || 0
+      const impressions = Number(c.impressions) || 0
+      const clicks = Number(c.clicks) || 0
+      const conversions = Number(c.conversions) || 0
+      const budget = Number(c.daily_budget) || 0
+      const type = c.campaign_type || 'N/A'
+
+      parts.push(`${i + 1}. [${status}] "${name}" (${type})
+   - Custo: R$ ${cost.toFixed(2)} | CPC: R$ ${cpc.toFixed(2)} | CTR: ${ctr.toFixed(2)}% | CPA: R$ ${cpa.toFixed(2)}
+   - Impressoes: ${impressions.toLocaleString('pt-BR')} | Cliques: ${clicks.toLocaleString('pt-BR')} | Conversoes: ${conversions}
+   - Orcamento: R$ ${budget.toFixed(2)}/dia`)
+    })
+  }
+
+  // ── Ads Daily Trend (Meta aggregated) ──────────────────────────────────────
   if (data.ads.length > 0) {
     const totalSpend = data.ads.reduce((s, r) => s + (Number(r.total_spend) || 0), 0)
     const totalClicks = data.ads.reduce((s, r) => s + (Number(r.total_clicks) || 0), 0)
@@ -189,7 +227,7 @@ function buildAdsContext(data: {
     const avgCtr = totalImpressions > 0 ? (totalClicks / totalImpressions) * 100 : 0
     const avgCpa = totalConversions > 0 ? totalSpend / totalConversions : 0
 
-    parts.push(`\nMETRICAS AGREGADAS (30 dias):
+    parts.push(`\nMETRICAS META ADS (30 dias):
 - Gasto Total: R$ ${totalSpend.toFixed(2)}
 - Impressoes: ${totalImpressions.toLocaleString('pt-BR')}
 - Cliques: ${totalClicks.toLocaleString('pt-BR')}
@@ -197,6 +235,45 @@ function buildAdsContext(data: {
 - CPC Medio: R$ ${avgCpc.toFixed(2)}
 - CTR Medio: ${avgCtr.toFixed(2)}%
 - CPA Medio: R$ ${avgCpa.toFixed(2)}`)
+  }
+
+  // ── Google Ads Daily Trend (aggregated) ───────────────────────────────────
+  if (data.googleAds.length > 0) {
+    const gTotalCost = data.googleAds.reduce((s, r) => s + (Number(r.total_cost) || 0), 0)
+    const gTotalClicks = data.googleAds.reduce((s, r) => s + (Number(r.total_clicks) || 0), 0)
+    const gTotalImpressions = data.googleAds.reduce((s, r) => s + (Number(r.total_impressions) || 0), 0)
+    const gTotalConversions = data.googleAds.reduce((s, r) => s + (Number(r.total_conversions) || 0), 0)
+    const gAvgCpc = gTotalClicks > 0 ? gTotalCost / gTotalClicks : 0
+    const gAvgCtr = gTotalImpressions > 0 ? (gTotalClicks / gTotalImpressions) * 100 : 0
+    const gAvgCpa = gTotalConversions > 0 ? gTotalCost / gTotalConversions : 0
+
+    parts.push(`\nMETRICAS GOOGLE ADS (30 dias):
+- Custo Total: R$ ${gTotalCost.toFixed(2)}
+- Impressoes: ${gTotalImpressions.toLocaleString('pt-BR')}
+- Cliques: ${gTotalClicks.toLocaleString('pt-BR')}
+- Conversoes: ${gTotalConversions}
+- CPC Medio: R$ ${gAvgCpc.toFixed(2)}
+- CTR Medio: ${gAvgCtr.toFixed(2)}%
+- CPA Medio: R$ ${gAvgCpa.toFixed(2)}`)
+  }
+
+  // ── Combined Cross-Platform Metrics ────────────────────────────────────────
+  {
+    const metaSpend = data.ads.reduce((s, r) => s + (Number(r.total_spend) || 0), 0)
+    const googleCost = data.googleAds.reduce((s, r) => s + (Number(r.total_cost) || 0), 0)
+    const metaConv = data.ads.reduce((s, r) => s + (Number(r.total_conversions) || 0), 0)
+    const googleConv = data.googleAds.reduce((s, r) => s + (Number(r.total_conversions) || 0), 0)
+    const combinedSpend = metaSpend + googleCost
+    const combinedConv = metaConv + googleConv
+    const combinedCpa = combinedConv > 0 ? combinedSpend / combinedConv : 0
+
+    if (combinedSpend > 0) {
+      parts.push(`\nMETRICAS COMBINADAS (Meta + Google, 30 dias):
+- Investimento Total: R$ ${combinedSpend.toFixed(2)}
+- Conversoes Totais: ${combinedConv}
+- CPA Combinado: R$ ${combinedCpa.toFixed(2)}
+- Split: Meta ${((metaSpend / combinedSpend) * 100).toFixed(0)}% / Google ${((googleCost / combinedSpend) * 100).toFixed(0)}%`)
+    }
   }
 
   // ── Financial Context ──────────────────────────────────────────────────────

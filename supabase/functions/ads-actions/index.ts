@@ -1,8 +1,7 @@
 import { serve } from 'https://deno.land/std@0.208.0/http/server.ts'
 import { getServiceClient, jsonResponse, corsHeaders } from '../_shared/supabase-client.ts'
 import { GRAPH_API, getMetaCredentials, metaPost, metaGet, rateLimit } from '../_shared/meta-api.ts'
-
-const GEMINI_API = 'https://generativelanguage.googleapis.com/v1beta/models'
+import { GEMINI_API, GEMINI_MODEL } from '../_shared/gemini.ts'
 const IG_ACCOUNT_ID = '17841451890607872'
 const PAGE_ID = '925935230607764'
 
@@ -359,7 +358,7 @@ RESPONDA com este JSON exato:
 }`
 
   const res = await fetch(
-    `${GEMINI_API}/gemini-2.5-flash:generateContent?key=${geminiKey}`,
+    `${GEMINI_API}/${GEMINI_MODEL}:generateContent?key=${geminiKey}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -479,6 +478,129 @@ async function handleCreateFromPost(
     adset_id: adsetId,
     creative_id: creativeId,
     ad_id: adId,
+    status: 'PAUSED',
+  })
+}
+
+// ---------------------------------------------------------------------------
+// handleCreateFromUpload — upload image from PC (base64) and create campaign
+// ---------------------------------------------------------------------------
+
+async function handleCreateFromUpload(
+  supabase: ReturnType<typeof getServiceClient>,
+  accountRef: string,
+  accessToken: string,
+  body: Record<string, unknown>,
+  source: string,
+): Promise<Response> {
+  const imageBase64 = body.image_base64 as string
+  const imageName = (body.image_name as string) || 'ad_image.jpg'
+  const adMessage = (body.ad_message as string) || ''
+  const destinationUrl = body.destination_url as string
+  const campaignName = body.campaign_name as string
+  const dailyBudget = body.daily_budget as number
+  const targeting = body.targeting as Record<string, unknown>
+  const ctaType = (body.cta_type as string) || 'LEARN_MORE'
+
+  if (!imageBase64) return jsonResponse({ error: 'image_base64 is required' }, 400)
+  if (!destinationUrl) return jsonResponse({ error: 'destination_url is required' }, 400)
+  if (!campaignName) return jsonResponse({ error: 'campaign_name is required' }, 400)
+  if (!dailyBudget || dailyBudget <= 0) return jsonResponse({ error: 'daily_budget must be positive' }, 400)
+
+  // Step 1: Upload image to Meta Ad Images
+  await rateLimit()
+  const uploadResult = await metaPost(`${accountRef}/adimages`, {
+    bytes: imageBase64,
+    name: imageName,
+  }, accessToken)
+
+  // Meta returns: { images: { "filename": { hash: "...", url: "..." } } }
+  const imagesMap = uploadResult.images as Record<string, { hash: string }>
+  const imageHash = imagesMap?.[imageName]?.hash
+  if (!imageHash) {
+    return jsonResponse({ error: 'Failed to upload image to Meta. Check image format and size (max 30MB, JPG/PNG).' }, 400)
+  }
+
+  // Step 2: Create Campaign
+  await rateLimit()
+  const campaignResult = await metaPost(`${accountRef}/campaigns`, {
+    name: campaignName,
+    objective: 'OUTCOME_TRAFFIC',
+    status: 'PAUSED',
+    special_ad_categories: '[]',
+  }, accessToken)
+  const campaignId = campaignResult.id as string
+
+  await logAction(supabase, 'create_campaign', campaignId, 'success', {
+    name: campaignName,
+    objective: 'OUTCOME_TRAFFIC',
+    source: 'ai_ad_creator_upload',
+    image_hash: imageHash,
+  }, source)
+
+  // Step 3: Create AdSet
+  await rateLimit()
+  const startTime = new Date()
+  startTime.setHours(startTime.getHours() + 1)
+
+  const adsetResult = await metaPost(`${accountRef}/adsets`, {
+    campaign_id: campaignId,
+    name: `${campaignName} - AdSet`,
+    daily_budget: String(Math.round(dailyBudget * 100)),
+    billing_event: 'IMPRESSIONS',
+    optimization_goal: 'LINK_CLICKS',
+    targeting: JSON.stringify(targeting || { geo_locations: { countries: ['BR'] } }),
+    start_time: startTime.toISOString(),
+    status: 'PAUSED',
+    promoted_object: JSON.stringify({ page_id: PAGE_ID }),
+  }, accessToken)
+  const adsetId = adsetResult.id as string
+
+  await logAction(supabase, 'create_adset', campaignId, 'success', {
+    adset_id: adsetId, daily_budget: dailyBudget,
+  }, source)
+
+  // Step 4: Create Ad Creative (image ad with object_story_spec)
+  await rateLimit()
+  const creativeResult = await metaPost(`${accountRef}/adcreatives`, {
+    name: `${campaignName} - Creative`,
+    object_story_spec: JSON.stringify({
+      page_id: PAGE_ID,
+      link_data: {
+        image_hash: imageHash,
+        link: destinationUrl,
+        message: adMessage,
+        call_to_action: { type: ctaType, value: { link: destinationUrl } },
+      },
+    }),
+  }, accessToken)
+  const creativeId = creativeResult.id as string
+
+  await logAction(supabase, 'create_ad_creative', campaignId, 'success', {
+    creative_id: creativeId, image_hash: imageHash, cta_type: ctaType,
+  }, source)
+
+  // Step 5: Create Ad
+  await rateLimit()
+  const adResult = await metaPost(`${accountRef}/ads`, {
+    name: `${campaignName} - Ad`,
+    adset_id: adsetId,
+    creative: JSON.stringify({ creative_id: creativeId }),
+    status: 'PAUSED',
+  }, accessToken)
+  const adId = adResult.id as string
+
+  await logAction(supabase, 'create_ad', campaignId, 'success', {
+    ad_id: adId, creative_id: creativeId, adset_id: adsetId,
+  }, source)
+
+  return jsonResponse({
+    success: true,
+    campaign_id: campaignId,
+    adset_id: adsetId,
+    creative_id: creativeId,
+    ad_id: adId,
+    image_hash: imageHash,
     status: 'PAUSED',
   })
 }
@@ -808,6 +930,20 @@ serve(async (req) => {
     }
 
     // -----------------------------------------------------------------------
+    // POST /create-from-upload
+    // -----------------------------------------------------------------------
+    if (req.method === 'POST' && action === 'create-from-upload') {
+      try {
+        const { accessToken, accountRef } = getMetaCredentials()
+        return await handleCreateFromUpload(supabase, accountRef, accessToken, body, source)
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : 'Unknown error'
+        await logAction(supabase, 'create_from_upload', null, 'error', { error: msg }, source)
+        return jsonResponse({ error: msg }, 500)
+      }
+    }
+
+    // -----------------------------------------------------------------------
     // GET /pending-actions
     // -----------------------------------------------------------------------
     if (req.method === 'GET' && action === 'pending-actions') {
@@ -861,6 +997,7 @@ serve(async (req) => {
         'POST /budget/{campaign_id}',
         'POST /create-campaign',
         'POST /create-from-post',
+        'POST /create-from-upload',
         'POST /fetch-ig-posts',
         'POST /search-interests',
         'POST /ai-strategy',

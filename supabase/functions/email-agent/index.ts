@@ -1,5 +1,6 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { GEMINI_API, GEMINI_MODEL } from '../_shared/gemini.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -106,7 +107,7 @@ const ASSINATURA_HTML = `
 async function callGemini(prompt: string): Promise<string> {
   const apiKey = Deno.env.get('GEMINI_API_KEY')!
   const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
+    `${GEMINI_API}/${GEMINI_MODEL}:generateContent?key=${apiKey}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -233,8 +234,12 @@ async function executarReembolso(cobrancaId: string, assinaturaId?: string) {
 }
 
 // ─── Email classification ──────────────────────────────────────────
-async function classificarEmail(remetente: string, assunto: string, corpo: string, historico?: string) {
+async function classificarEmail(remetente: string, assunto: string, corpo: string, historico?: string, knowledgeContext?: string) {
   let conteudo = PROMPT_BASE
+
+  if (knowledgeContext) {
+    conteudo += `\n\n=== BASE DE CONHECIMENTO DO NEGOCIO ===\n${knowledgeContext}\n=== FIM DA BASE DE CONHECIMENTO ===`
+  }
 
   if (historico) {
     conteudo += `\n\n=== HISTÓRICO DE INTERAÇÕES COM ESTE CLIENTE ===\n${historico}\n=== FIM DO HISTÓRICO ===\n\nUse o histórico acima para dar continuidade ao atendimento. Se o cliente já foi atendido antes, considere o contexto. Não repita informações já enviadas.`
@@ -268,8 +273,8 @@ async function detectarFeedback(assunto: string, corpo: string) {
 }
 
 // ─── Process a single email ────────────────────────────────────────
-async function processarEmail(remetente: string, assunto: string, corpo: string, historico?: string) {
-  const resultado = await classificarEmail(remetente, assunto, corpo, historico)
+async function processarEmail(remetente: string, assunto: string, corpo: string, historico?: string, knowledgeContext?: string) {
+  const resultado = await classificarEmail(remetente, assunto, corpo, historico, knowledgeContext)
 
   if (resultado.tipo === 'REEMBOLSO') {
     try {
@@ -405,6 +410,16 @@ serve(async (req) => {
         })
       }
 
+      // Load global knowledge base
+      const { data: knowledgeDocs } = await supabase
+        .from('ai_knowledge_base')
+        .select('name, content')
+        .order('created_at', { ascending: true })
+
+      const knowledgeContext = knowledgeDocs && knowledgeDocs.length > 0
+        ? knowledgeDocs.map((d: any) => `--- ${d.name} ---\n${d.content}`).join('\n\n')
+        : undefined
+
       // Fetch previous interactions with this sender
       const emailClean = extrairEmail(remetente)
       const { data: prevTasks } = await supabase
@@ -423,7 +438,7 @@ serve(async (req) => {
       }
 
       // Process as support email
-      const resultado = await processarEmail(remetente, assunto, corpo, historico || undefined)
+      const resultado = await processarEmail(remetente, assunto, corpo, historico || undefined, knowledgeContext)
 
       const status = resultado.precisa_acao_manual ? 'pending' : 'auto'
       await supabase.from('email_tasks').insert({

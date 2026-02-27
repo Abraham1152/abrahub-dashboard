@@ -1,6 +1,7 @@
 import { serve } from 'https://deno.land/std@0.208.0/http/server.ts'
 import { getServiceClient, jsonResponse, corsHeaders } from '../_shared/supabase-client.ts'
 import { getMetaCredentials, metaPost, rateLimit } from '../_shared/meta-api.ts'
+import { getGoogleAdsCredentials, googleAdsMutateCampaign, googleAdsMutateBudget, googleAdsQuery, realToMicros, googleRateLimit } from '../_shared/google-ads-api.ts'
 
 // ─── Types ──────────────────────────────────────────────────────────
 
@@ -93,6 +94,31 @@ function evaluateCampaign(campaign: any, config: OptimizationConfig): Optimizati
 
 // ─── Main Handler ───────────────────────────────────────────────────
 
+// ─── Normalize Google campaign to the same shape as Meta for evaluation ────
+function normalizeGoogleCampaign(c: any): any {
+  return {
+    campaign_id: c.campaign_id,
+    name: c.name,
+    status: c.status,
+    spend: c.cost || 0,
+    cost_per_result: c.cost_per_conversion || 0,
+    ctr: c.ctr || 0,
+    impressions: c.impressions || 0,
+    conversions: c.conversions || 0,
+    daily_budget: c.daily_budget || 0,
+    _platform: 'google',
+    _table: 'google_ads_campaigns',
+  }
+}
+
+function normalizeMetaCampaign(c: any): any {
+  return {
+    ...c,
+    _platform: 'meta',
+    _table: 'ads_campaigns',
+  }
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders() })
@@ -100,6 +126,17 @@ serve(async (req) => {
 
   const supabase = getServiceClient()
   const startTime = Date.now()
+
+  // Accept optional platform filter from request body
+  let requestedPlatform: 'meta' | 'google' | 'all' = 'all'
+  try {
+    const body = await req.json()
+    if (body?.platform === 'meta' || body?.platform === 'google') {
+      requestedPlatform = body.platform
+    }
+  } catch {
+    // No body or invalid JSON — default to 'all'
+  }
 
   try {
     // 1. Fetch optimization config
@@ -129,17 +166,30 @@ serve(async (req) => {
       })
     }
 
-    // 2. Fetch ALL active campaigns
-    const { data: campaigns, error: campaignsError } = await supabase
-      .from('ads_campaigns')
-      .select('*')
-      .eq('status', 'ACTIVE')
+    // 2. Fetch active campaigns from both platforms
+    const allCampaigns: any[] = []
 
-    if (campaignsError) {
-      return jsonResponse({ error: 'Erro ao buscar campanhas', details: campaignsError.message }, 500)
+    if (requestedPlatform === 'meta' || requestedPlatform === 'all') {
+      const { data: metaCampaigns } = await supabase
+        .from('ads_campaigns')
+        .select('*')
+        .eq('status', 'ACTIVE')
+      if (metaCampaigns) {
+        allCampaigns.push(...metaCampaigns.map(normalizeMetaCampaign))
+      }
     }
 
-    if (!campaigns || campaigns.length === 0) {
+    if (requestedPlatform === 'google' || requestedPlatform === 'all') {
+      const { data: googleCampaigns } = await supabase
+        .from('google_ads_campaigns')
+        .select('*')
+        .eq('status', 'ENABLED')
+      if (googleCampaigns) {
+        allCampaigns.push(...googleCampaigns.map(normalizeGoogleCampaign))
+      }
+    }
+
+    if (allCampaigns.length === 0) {
       return jsonResponse({
         success: true,
         message: 'Nenhuma campanha ativa encontrada',
@@ -152,11 +202,17 @@ serve(async (req) => {
       })
     }
 
-    // Get Meta credentials for API calls
-    const { accessToken } = getMetaCredentials()
+    // Get Meta credentials (may fail if not configured — that's OK for Google-only)
+    let metaAccessToken: string | null = null
+    try {
+      const { accessToken } = getMetaCredentials()
+      metaAccessToken = accessToken
+    } catch {
+      // Meta not configured — skip Meta direct execution
+    }
 
     // 3. Evaluate each campaign against rules
-    const decisions: OptimizationDecision[] = campaigns.map((campaign: any) =>
+    const decisions: OptimizationDecision[] = allCampaigns.map((campaign: any) =>
       evaluateCampaign(campaign, config)
     )
 
@@ -171,10 +227,14 @@ serve(async (req) => {
     const approvalMode = config.approval_mode_enabled ?? true
 
     for (const decision of decisions) {
+      const campaign = allCampaigns.find(c => c.campaign_id === decision.campaign_id)
+      const platform = campaign?._platform || 'meta'
+      const table = campaign?._table || 'ads_campaigns'
+      const pausedStatus = platform === 'google' ? 'PAUSED' : 'PAUSED'
+
       // ── PAUSE action ──────────────────────────────────────────
       if (decision.action === 'pause' && config.auto_pause_enabled) {
 
-        // ── Approval mode: create pending action instead of executing ──
         if (approvalMode) {
           await supabase.from('ads_pending_actions').insert({
             campaign_id: decision.campaign_id,
@@ -182,7 +242,8 @@ serve(async (req) => {
             action_type: 'pause',
             ai_reasoning: decision.reason,
             current_metrics: decision.metrics,
-            proposed_changes: { status: 'PAUSED' },
+            proposed_changes: { status: pausedStatus },
+            platform,
           })
           pendingCount++
           pausedCount++
@@ -192,6 +253,7 @@ serve(async (req) => {
             source: 'optimizer',
             campaign_id: decision.campaign_id,
             campaign_name: decision.campaign_name,
+            platform,
             details: {
               reason: decision.reason,
               metrics: decision.metrics,
@@ -201,24 +263,26 @@ serve(async (req) => {
           continue
         }
 
-        // ── Direct execution (approval mode OFF) ──
+        // Direct execution
         try {
-          await metaPost(decision.campaign_id, { status: 'PAUSED' }, accessToken)
-          await rateLimit()
-
-          const { error: updateError } = await supabase
-            .from('ads_campaigns')
-            .update({ status: 'PAUSED' })
-            .eq('campaign_id', decision.campaign_id)
-
-          if (updateError) {
-            errors.push(`DB update failed for pause ${decision.campaign_id}: ${updateError.message}`)
+          if (platform === 'meta' && metaAccessToken) {
+            await metaPost(decision.campaign_id, { status: 'PAUSED' }, metaAccessToken)
+            await rateLimit()
+          } else if (platform === 'google') {
+            const googleCreds = await getGoogleAdsCredentials(supabase)
+            await googleAdsMutateCampaign(googleCreds, decision.campaign_id, { status: 'PAUSED' }, 'status')
+            await googleRateLimit()
           }
+
+          await supabase
+            .from(table)
+            .update({ status: pausedStatus })
+            .eq('campaign_id', decision.campaign_id)
 
           pausedCount++
         } catch (err) {
           const msg = err instanceof Error ? err.message : 'Unknown error'
-          errors.push(`Meta API pause failed for ${decision.campaign_id}: ${msg}`)
+          errors.push(`${platform} API pause failed for ${decision.campaign_id}: ${msg}`)
         }
 
         await supabase.from('ads_agent_actions').insert({
@@ -226,18 +290,15 @@ serve(async (req) => {
           source: 'optimizer',
           campaign_id: decision.campaign_id,
           campaign_name: decision.campaign_name,
-          details: {
-            reason: decision.reason,
-            metrics: decision.metrics,
-          },
+          platform,
+          details: { reason: decision.reason, metrics: decision.metrics },
         })
 
       // ── BOOST action ──────────────────────────────────────────
       } else if (decision.action === 'boost' && config.auto_boost_enabled) {
 
-        // Fetch current budget for both approval and direct modes
         const { data: campaignRecord } = await supabase
-          .from('ads_campaigns')
+          .from(table)
           .select('daily_budget')
           .eq('campaign_id', decision.campaign_id)
           .single()
@@ -251,7 +312,6 @@ serve(async (req) => {
           )
 
           if (newBudget > currentBudget) {
-            // ── Approval mode: create pending action ──
             if (approvalMode) {
               await supabase.from('ads_pending_actions').insert({
                 campaign_id: decision.campaign_id,
@@ -259,10 +319,8 @@ serve(async (req) => {
                 action_type: 'boost',
                 ai_reasoning: decision.reason,
                 current_metrics: decision.metrics,
-                proposed_changes: {
-                  old_budget: currentBudget,
-                  new_budget: newBudget,
-                },
+                proposed_changes: { old_budget: currentBudget, new_budget: newBudget },
+                platform,
               })
               pendingCount++
               boostedCount++
@@ -272,6 +330,7 @@ serve(async (req) => {
                 source: 'optimizer',
                 campaign_id: decision.campaign_id,
                 campaign_name: decision.campaign_name,
+                platform,
                 details: {
                   reason: decision.reason,
                   metrics: decision.metrics,
@@ -283,23 +342,36 @@ serve(async (req) => {
               continue
             }
 
-            // ── Direct execution (approval mode OFF) ──
+            // Direct execution
             try {
-              await metaPost(
-                decision.campaign_id,
-                { daily_budget: String(Math.round(newBudget * 100)) },
-                accessToken
-              )
-              await rateLimit()
+              if (platform === 'meta' && metaAccessToken) {
+                await metaPost(
+                  decision.campaign_id,
+                  { daily_budget: String(Math.round(newBudget * 100)) },
+                  metaAccessToken
+                )
+                await rateLimit()
+              } else if (platform === 'google') {
+                // Google budget mutation requires budget resource ID — use google-ads-actions
+                const googleCreds = await getGoogleAdsCredentials(supabase)
+                const budgetResults = await googleAdsQuery(googleCreds, `
+                  SELECT campaign.id, campaign_budget.id
+                  FROM campaign WHERE campaign.id = ${decision.campaign_id}
+                `)
+                if (budgetResults[0]?.campaignBudget?.id) {
+                  await googleAdsMutateBudget(
+                    googleCreds,
+                    String(budgetResults[0].campaignBudget.id),
+                    realToMicros(newBudget)
+                  )
+                  await googleRateLimit()
+                }
+              }
 
-              const { error: updateError } = await supabase
-                .from('ads_campaigns')
+              await supabase
+                .from(table)
                 .update({ daily_budget: newBudget })
                 .eq('campaign_id', decision.campaign_id)
-
-              if (updateError) {
-                errors.push(`DB update failed for boost ${decision.campaign_id}: ${updateError.message}`)
-              }
 
               boostedCount++
 
@@ -308,6 +380,7 @@ serve(async (req) => {
                 source: 'optimizer',
                 campaign_id: decision.campaign_id,
                 campaign_name: decision.campaign_name,
+                platform,
                 details: {
                   reason: decision.reason,
                   metrics: decision.metrics,
@@ -317,18 +390,15 @@ serve(async (req) => {
               })
             } catch (err) {
               const msg = err instanceof Error ? err.message : 'Unknown error'
-              errors.push(`Meta API boost failed for ${decision.campaign_id}: ${msg}`)
+              errors.push(`${platform} API boost failed for ${decision.campaign_id}: ${msg}`)
 
               await supabase.from('ads_agent_actions').insert({
                 action_type: 'optimizer_boost',
                 source: 'optimizer',
                 campaign_id: decision.campaign_id,
                 campaign_name: decision.campaign_name,
-                details: {
-                  reason: decision.reason,
-                  metrics: decision.metrics,
-                  error: msg,
-                },
+                platform,
+                details: { reason: decision.reason, metrics: decision.metrics, error: msg },
               })
             }
           } else {
@@ -338,6 +408,7 @@ serve(async (req) => {
               source: 'optimizer',
               campaign_id: decision.campaign_id,
               campaign_name: decision.campaign_name,
+              platform,
               details: {
                 reason: `${decision.reason} (budget ja no maximo: R$${currentBudget.toFixed(2)})`,
                 metrics: decision.metrics,
@@ -351,6 +422,7 @@ serve(async (req) => {
             source: 'optimizer',
             campaign_id: decision.campaign_id,
             campaign_name: decision.campaign_name,
+            platform,
             details: {
               reason: `${decision.reason} (budget atual desconhecido, boost nao aplicado)`,
               metrics: decision.metrics,
@@ -366,10 +438,8 @@ serve(async (req) => {
           source: 'optimizer',
           campaign_id: decision.campaign_id,
           campaign_name: decision.campaign_name,
-          details: {
-            reason: decision.reason,
-            metrics: decision.metrics,
-          },
+          platform,
+          details: { reason: decision.reason, metrics: decision.metrics },
         })
 
       // ── SKIP action ───────────────────────────────────────────
@@ -380,10 +450,8 @@ serve(async (req) => {
           source: 'optimizer',
           campaign_id: decision.campaign_id,
           campaign_name: decision.campaign_name,
-          details: {
-            reason: decision.reason,
-            metrics: decision.metrics,
-          },
+          platform,
+          details: { reason: decision.reason, metrics: decision.metrics },
         })
 
       // ── Pause/Boost with auto-action disabled ─────────────────
@@ -396,11 +464,8 @@ serve(async (req) => {
           source: 'optimizer',
           campaign_id: decision.campaign_id,
           campaign_name: decision.campaign_name,
-          details: {
-            reason: decision.reason,
-            metrics: decision.metrics,
-            auto_action_disabled: true,
-          },
+          platform,
+          details: { reason: decision.reason, metrics: decision.metrics, auto_action_disabled: true },
         })
       }
     }
@@ -410,6 +475,7 @@ serve(async (req) => {
 
     return jsonResponse({
       success: true,
+      platform: requestedPlatform,
       evaluated: decisions.length,
       paused: pausedCount,
       boosted: boostedCount,

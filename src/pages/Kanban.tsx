@@ -596,7 +596,7 @@ function TaskCard({
           onCardDrop(e)
         }
       }}
-      className={`bg-white dark:bg-neutral-900 rounded-lg p-2.5 border border-gray-200/80 dark:border-neutral-800 shadow-sm hover:shadow cursor-grab active:cursor-grabbing transition-all group ${
+      className={`bg-white dark:bg-neutral-900 rounded-lg p-2.5 border border-gray-200/80 dark:border-neutral-800 shadow-sm hover:shadow cursor-grab active:cursor-grabbing transition-all group overflow-hidden ${
         isDragging ? 'opacity-40 scale-95' : ''
       }`}
     >
@@ -622,7 +622,7 @@ function TaskCard({
 
         {/* Content - clickable */}
         <div className="flex-1 min-w-0 cursor-pointer" onClick={onView}>
-          <p className="text-xs font-medium text-gray-900 dark:text-white leading-snug">{task.title}</p>
+          <p className="text-xs font-medium text-gray-900 dark:text-white leading-snug break-words line-clamp-3">{task.title}</p>
           {task.description && (
             <p className="text-[10px] text-gray-400 dark:text-neutral-500 mt-0.5 line-clamp-1">{task.description}</p>
           )}
