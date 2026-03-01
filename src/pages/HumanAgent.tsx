@@ -19,6 +19,7 @@ import {
   X,
   ShoppingBag,
   DollarSign,
+  Send,
 } from 'lucide-react'
 
 const SUPABASE_URL = 'https://jdodenbjohnqvhvldfqu.supabase.co'
@@ -767,6 +768,32 @@ function ChatView({ conversation, messages, onBack }: { conversation: Conversati
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const [toggling, setToggling] = useState(false)
+  const [replyText, setReplyText] = useState('')
+  const [sending, setSending] = useState(false)
+  const [sendError, setSendError] = useState<string | null>(null)
+
+  const handleManualSend = async () => {
+    if (!replyText.trim() || sending) return
+    setSending(true)
+    setSendError(null)
+    try {
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/send-dm`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${ANON_KEY}` },
+        body: JSON.stringify({ recipient_id: conversation.ig_user_id, message: replyText.trim() }),
+      })
+      const data = await res.json()
+      if (!res.ok || data.error) {
+        setSendError(data.error || 'Erro ao enviar')
+      } else {
+        setReplyText('')
+        queryClient.invalidateQueries({ queryKey: ['human_agent_messages', conversation.id] })
+      }
+    } catch (e: any) {
+      setSendError(e?.message || 'Erro de conexão')
+    }
+    setSending(false)
+  }
 
   const isAiActive = conversation.status === 'ai_active'
 
@@ -832,6 +859,32 @@ function ChatView({ conversation, messages, onBack }: { conversation: Conversati
             </div>
           ))
         )}
+      </div>
+
+      {/* Manual reply input */}
+      <div className="p-3 border-t border-gray-100 dark:border-neutral-800">
+        {sendError && <p className="text-xs text-red-500 mb-2">{sendError}</p>}
+        <div className="flex gap-2">
+          <textarea
+            value={replyText}
+            onChange={e => setReplyText(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleManualSend() } }}
+            placeholder="Responder manualmente..."
+            rows={2}
+            className="flex-1 px-3 py-2 text-sm bg-white dark:bg-neutral-800 border border-gray-200 dark:border-neutral-700 rounded-xl text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-blue-500/40 resize-none transition-colors"
+          />
+          <button
+            onClick={handleManualSend}
+            disabled={!replyText.trim() || sending}
+            className="px-3 py-2 rounded-xl bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 transition-colors flex items-center gap-1.5 text-sm font-medium self-end"
+          >
+            <Send size={14} className={sending ? 'animate-pulse' : ''} />
+            {sending ? 'Enviando...' : 'Enviar'}
+          </button>
+        </div>
+        <p className="text-[10px] text-gray-400 dark:text-neutral-600 mt-1.5">
+          Conta: @abrahubstudio · Enter para enviar
+        </p>
       </div>
     </div>
   )
