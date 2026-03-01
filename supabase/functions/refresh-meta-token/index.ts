@@ -1,5 +1,6 @@
 import { serve } from 'https://deno.land/std@0.208.0/http/server.ts'
 import { jsonResponse, corsHeaders } from '../_shared/supabase-client.ts'
+import { saveMetaTokens } from '../_shared/meta-token.ts'
 
 const FB_API = 'https://graph.facebook.com/v21.0'
 const APP_ID = '1543735980062794'
@@ -80,11 +81,17 @@ serve(async (req) => {
       type: debugData.data?.type,
     }
 
-    // Step 4: Return the tokens so they can be saved
+    // Step 4: Save tokens to DB automatically (no more manual copy-paste)
+    await saveMetaTokens({
+      adsToken: longLivedUserToken,
+      adsExpiresIn: expiresIn || 5184000, // 60 days default
+      instagramToken: permanentPageToken,
+    })
+
     results.tokens = {
       long_lived_user_token: longLivedUserToken,
       permanent_page_token: permanentPageToken,
-      instruction: 'Save permanent_page_token as INSTAGRAM_ACCESS_TOKEN',
+      saved_to_db: true,
     }
 
     results.success = true

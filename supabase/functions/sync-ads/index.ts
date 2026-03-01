@@ -1,5 +1,6 @@
 import { serve } from 'https://deno.land/std@0.208.0/http/server.ts'
 import { getServiceClient, logSync, jsonResponse, corsHeaders, todayDate } from '../_shared/supabase-client.ts'
+import { getMetaToken } from '../_shared/meta-token.ts'
 
 const GRAPH_API = 'https://graph.facebook.com/v21.0'
 
@@ -18,11 +19,14 @@ serve(async (req) => {
     return new Response('ok', { headers: corsHeaders() })
   }
 
-  const accessToken = Deno.env.get('META_ADS_ACCESS_TOKEN')
   const adAccountId = Deno.env.get('META_AD_ACCOUNT_ID')
+  if (!adAccountId) return jsonResponse({ error: 'META_AD_ACCOUNT_ID not configured' }, 500)
 
-  if (!accessToken || !adAccountId) {
-    return jsonResponse({ error: 'Meta Ads credentials not configured' }, 500)
+  let accessToken: string
+  try {
+    accessToken = await getMetaToken('ads')
+  } catch (e) {
+    return jsonResponse({ error: `Token error: ${e instanceof Error ? e.message : e}` }, 500)
   }
 
   const supabase = getServiceClient()
