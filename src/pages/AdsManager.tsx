@@ -223,6 +223,7 @@ export default function AdsManagerPage() {
   const queryClient = useQueryClient()
   const { t } = useTranslation()
   const [syncing, setSyncing] = useState(false)
+  const [syncError, setSyncError] = useState<string | null>(null)
   const [sortField, setSortField] = useState<SortField>('spend')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
   const [showConfig, setShowConfig] = useState(false)
@@ -266,17 +267,17 @@ export default function AdsManagerPage() {
     },
   })
 
-  // Fetch churn for CAC
+  // Fetch churn for new customers display
   const { data: churnData } = useQuery({
     queryKey: ['ads-churn'],
     queryFn: async () => {
       const { data } = await supabase
-        .from('churn_metrics')
-        .select('*')
+        .from('churn_metrics' as any)
+        .select('new_customers')
         .order('date', { ascending: false })
         .limit(1)
         .single()
-      return data
+      return data as { new_customers: number } | null
     },
   })
 
@@ -290,16 +291,24 @@ export default function AdsManagerPage() {
   // Sync ads
   const handleSync = async () => {
     setSyncing(true)
+    setSyncError(null)
     try {
       const fn = platform === 'meta' ? 'sync-ads' : 'sync-google-ads'
-      await fetch(`${SUPABASE_URL}/functions/v1/${fn}`, {
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/${fn}`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${ANON_KEY}` },
       })
-      queryClient.invalidateQueries({ queryKey: ['ads-campaigns'] })
-      queryClient.invalidateQueries({ queryKey: ['google-ads-campaigns'] })
-      queryClient.invalidateQueries({ queryKey: ['ads-agent-actions'] })
-    } catch {}
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        setSyncError(err.error || `Erro ${res.status} ao sincronizar`)
+      } else {
+        queryClient.invalidateQueries({ queryKey: ['ads-campaigns'] })
+        queryClient.invalidateQueries({ queryKey: ['google-ads-campaigns'] })
+        queryClient.invalidateQueries({ queryKey: ['ads-agent-actions'] })
+      }
+    } catch (e: any) {
+      setSyncError(e?.message || 'Erro de conexão ao sincronizar')
+    }
     setSyncing(false)
   }
 
@@ -321,7 +330,7 @@ export default function AdsManagerPage() {
   const activeCampaigns = allNormalized.filter(c => c.status === 'ACTIVE' || c.status === 'ENABLED').length
   const avgCpa = totalConversions > 0 ? totalSpend / totalConversions : 0
   const newCustomers = churnData?.new_customers || 0
-  const cac = newCustomers > 0 ? totalSpend / newCustomers : 0
+  const cac = totalSpend > 0 && totalConversions > 0 ? totalSpend / totalConversions : 0
   const totalImpressions = allNormalized.reduce((s, c) => s + c.impressions, 0)
   const totalClicks = allNormalized.reduce((s, c) => s + c.clicks, 0)
   const avgCtr = totalImpressions > 0 ? (totalClicks / totalImpressions) * 100 : 0
@@ -401,6 +410,9 @@ export default function AdsManagerPage() {
           </button>
         </div>
       </div>
+      {syncError && (
+        <p className="text-xs text-red-500 mt-1 text-right">{syncError}</p>
+      )}
 
       {/* Platform Tabs */}
       <div className="flex items-center gap-1 bg-white dark:bg-neutral-900 border border-gray-200 dark:border-neutral-800 rounded-xl p-1 w-fit">
@@ -1667,13 +1679,50 @@ function AdCreatorWizard({ onClose, queryClient }: { onClose: () => void; queryC
           {/* Instagram post grid */}
           {creatorMode === 'instagram' && (
             <>
-              <p className="text-xs text-gray-500 dark:text-neutral-400 mb-3">{t('ads.select_post_hint')}</p>
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-xs text-gray-500 dark:text-neutral-400">{t('ads.select_post_hint')}</p>
+                <button
+                  onClick={async () => {
+                    setLoadingPosts(true)
+                    await fetch(`${SUPABASE_URL}/functions/v1/sync-instagram`, {
+                      method: 'POST',
+                      headers: { 'Authorization': `Bearer ${ANON_KEY}` },
+                    })
+                    const res = await adsAction('/fetch-ig-posts', 'POST')
+                    setPosts(res.posts || [])
+                    setLoadingPosts(false)
+                  }}
+                  disabled={loadingPosts}
+                  className="flex items-center gap-1 text-xs text-purple-500 hover:text-purple-600 disabled:opacity-50"
+                >
+                  <RefreshCw size={11} className={loadingPosts ? 'animate-spin' : ''} />
+                  Atualizar posts
+                </button>
+              </div>
               {loadingPosts ? (
                 <div className="flex items-center justify-center py-12">
                   <Loader2 className="animate-spin text-purple-500" size={28} />
                 </div>
               ) : posts.length === 0 ? (
-                <p className="text-sm text-gray-400 dark:text-neutral-500 text-center py-8">{t('ads.no_posts')}</p>
+                <div className="text-center py-8 flex flex-col items-center gap-3">
+                  <p className="text-sm text-gray-400 dark:text-neutral-500">{t('ads.no_posts')}</p>
+                  <button
+                    onClick={async () => {
+                      setLoadingPosts(true)
+                      await fetch(`${SUPABASE_URL}/functions/v1/sync-instagram`, {
+                        method: 'POST',
+                        headers: { 'Authorization': `Bearer ${ANON_KEY}` },
+                      })
+                      const res = await adsAction('/fetch-ig-posts', 'POST')
+                      setPosts(res.posts || [])
+                      setLoadingPosts(false)
+                    }}
+                    className="flex items-center gap-1.5 text-xs text-purple-500 hover:text-purple-600 underline"
+                  >
+                    <RefreshCw size={12} />
+                    Sincronizar Instagram
+                  </button>
+                </div>
               ) : (
                 <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 max-h-[420px] overflow-y-auto pr-1">
                   {posts.map(post => (
