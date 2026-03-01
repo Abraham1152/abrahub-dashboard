@@ -880,7 +880,7 @@ serve(async (req) => {
         return jsonResponse({ error: 'campaign_id is required' }, 400)
       }
       try {
-        const { accessToken } = getMetaCredentials()
+        const { accessToken } = await getMetaCredentials()
         return await handlePause(supabase, param, accessToken, source)
       } catch (error) {
         const msg = error instanceof Error ? error.message : 'Unknown error'
@@ -897,7 +897,7 @@ serve(async (req) => {
         return jsonResponse({ error: 'campaign_id is required' }, 400)
       }
       try {
-        const { accessToken } = getMetaCredentials()
+        const { accessToken } = await getMetaCredentials()
         return await handleResume(supabase, param, accessToken, source)
       } catch (error) {
         const msg = error instanceof Error ? error.message : 'Unknown error'
@@ -914,7 +914,7 @@ serve(async (req) => {
         return jsonResponse({ error: 'campaign_id is required' }, 400)
       }
       try {
-        const { accessToken } = getMetaCredentials()
+        const { accessToken } = await getMetaCredentials()
         return await handleBudget(supabase, param, accessToken, body, source)
       } catch (error) {
         const msg = error instanceof Error ? error.message : 'Unknown error'
@@ -928,7 +928,7 @@ serve(async (req) => {
     // -----------------------------------------------------------------------
     if (req.method === 'POST' && action === 'create-campaign') {
       try {
-        const { accessToken, accountRef } = getMetaCredentials()
+        const { accessToken, accountRef } = await getMetaCredentials()
         return await handleCreateCampaign(supabase, accountRef, accessToken, body, source)
       } catch (error) {
         const msg = error instanceof Error ? error.message : 'Unknown error'
@@ -978,7 +978,7 @@ serve(async (req) => {
     // -----------------------------------------------------------------------
     if (req.method === 'POST' && action === 'search-interests') {
       try {
-        const { accessToken } = getMetaCredentials()
+        const { accessToken } = await getMetaCredentials()
         return await handleSearchInterests(accessToken, body)
       } catch (error) {
         const msg = error instanceof Error ? error.message : 'Unknown error'
@@ -1003,7 +1003,7 @@ serve(async (req) => {
     // -----------------------------------------------------------------------
     if (req.method === 'POST' && action === 'create-from-post') {
       try {
-        const { accessToken, accountRef } = getMetaCredentials()
+        const { accessToken, accountRef } = await getMetaCredentials()
         return await handleCreateFromPost(supabase, accountRef, accessToken, body, source)
       } catch (error) {
         const msg = error instanceof Error ? error.message : 'Unknown error'
@@ -1017,7 +1017,7 @@ serve(async (req) => {
     // -----------------------------------------------------------------------
     if (req.method === 'POST' && action === 'create-from-upload') {
       try {
-        const { accessToken, accountRef } = getMetaCredentials()
+        const { accessToken, accountRef } = await getMetaCredentials()
         return await handleCreateFromUpload(supabase, accountRef, accessToken, body, source)
       } catch (error) {
         const msg = error instanceof Error ? error.message : 'Unknown error'
@@ -1046,7 +1046,7 @@ serve(async (req) => {
         return jsonResponse({ error: 'action id is required' }, 400)
       }
       try {
-        const { accessToken } = getMetaCredentials()
+        const { accessToken } = await getMetaCredentials()
         return await handleApproveAction(supabase, param, accessToken)
       } catch (error) {
         const msg = error instanceof Error ? error.message : 'Unknown error'

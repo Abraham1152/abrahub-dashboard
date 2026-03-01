@@ -1,11 +1,10 @@
 export const GRAPH_API = 'https://graph.facebook.com/v21.0'
 
-export function getMetaCredentials() {
-  const accessToken = Deno.env.get('META_ADS_ACCESS_TOKEN')
+export async function getMetaCredentials() {
+  const { getMetaToken } = await import('./meta-token.ts')
   const adAccountId = Deno.env.get('META_AD_ACCOUNT_ID')
-  if (!accessToken || !adAccountId) {
-    throw new Error('Meta Ads credentials not configured')
-  }
+  if (!adAccountId) throw new Error('META_AD_ACCOUNT_ID not configured')
+  const accessToken = await getMetaToken('ads')
   const accountRef = adAccountId.startsWith('act_') ? adAccountId : `act_${adAccountId}`
   return { accessToken, adAccountId, accountRef }
 }

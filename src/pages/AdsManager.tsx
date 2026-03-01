@@ -151,16 +151,26 @@ const statusConfig: Record<string, { key: string; color: string; icon: any }> = 
 
 const CHART_COLORS = ['#8b5cf6', '#ec4899', '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#6366f1', '#14b8a6']
 
-async function adsAction(path: string, method = 'POST', body?: any) {
-  const res = await fetch(`${SUPABASE_URL}/functions/v1/ads-actions${path}`, {
-    method,
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${ANON_KEY}`,
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  })
-  return res.json()
+async function adsAction(path: string, method = 'POST', body?: any, timeoutMs = 90000) {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/ads-actions${path}`, {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${ANON_KEY}`,
+      },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: controller.signal,
+    })
+    return res.json()
+  } catch (e: any) {
+    if (e?.name === 'AbortError') throw new Error('Tempo limite excedido (90s). Tente novamente.')
+    throw e
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 async function googleAdsAction(path: string, method = 'POST', body?: any) {
