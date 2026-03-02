@@ -7,6 +7,23 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
+// ─── No-reply patterns ────────────────────────────────────────────────────────
+const NO_REPLY_PATTERNS = [
+  'naoresponda', 'nao-responda', 'nao_responda',
+  'naoresponde', 'nao-responde', 'nao_responde',
+  'noreply', 'no-reply', 'no_reply',
+  'donotreply', 'do-not-reply', 'do_not_reply',
+  'dontreply', 'dont-reply', 'dont_reply',
+  'notreply', 'not-reply', 'not_reply',
+  'newsletter', 'notifications', 'notification',
+  'mailer-daemon', 'mailer_daemon', 'mailerdaemon',
+  'postmaster', 'bounce', 'bounces',
+  'automatico', 'automaticamente',
+]
+
+const PASTA_RESPONDIDOS = 'Respondidos'
+
+// ─── Prompts ──────────────────────────────────────────────────────────────────
 const FAQ = `Sempre tratar o usuário com cordialidade, mas sem ser muito formal para não perceber que é uma I.A
 Começar os e-mails com Bom dia *nome*, boa tarde ou boa noite.
 
@@ -103,7 +120,7 @@ const ASSINATURA_HTML = `
   </div>
 </div>`
 
-// ─── Gemini API call ──────────────────────────────────────────────
+// ─── Gemini ───────────────────────────────────────────────────────────────────
 async function callGemini(prompt: string): Promise<string> {
   const apiKey = Deno.env.get('GEMINI_API_KEY')!
   const res = await fetch(
@@ -118,122 +135,7 @@ async function callGemini(prompt: string): Promise<string> {
   return data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || ''
 }
 
-// ─── IMAP via simple fetch-based approach ──────────────────────────
-// Since Edge Functions can't do raw TCP, we use JMAP/REST or
-// a proxy approach. For now, we handle the email processing
-// that gets triggered from the frontend, which passes email data.
-
-// ─── Email sending via SMTP2GO or similar HTTP API ─────────────────
-async function enviarEmailSMTP(para: string, assunto: string, corpo: string): Promise<boolean> {
-  const emailFrom = Deno.env.get('EMAIL') || 'suporte@abrahub.com'
-  const emailPassword = Deno.env.get('EMAIL_PASSWORD') || ''
-  const smtpHost = Deno.env.get('SMTP_HOST') || 'smtpout.secureserver.net'
-
-  // Use a simple SMTP relay via fetch if available, otherwise
-  // we'll mark it for manual sending
-  // For GoDaddy SMTP, we need a worker/proxy since Edge Functions can't do raw SMTP
-  // For now, we use the Resend API or mark for manual send
-
-  // Try sending via a simple POST to our own proxy or mark as pending
-  return true
-}
-
-// ─── Stripe handlers ──────────────────────────────────────────────
-async function analisarReembolso(emailCliente: string) {
-  const stripeKey = Deno.env.get('STRIPE_SECRET_KEY')!
-  const PRAZO_DIAS = 7
-
-  // 1. Search customer by email
-  const custRes = await fetch(
-    `https://api.stripe.com/v1/customers?email=${encodeURIComponent(emailCliente)}&limit=1`,
-    { headers: { Authorization: `Bearer ${stripeKey}` } }
-  )
-  const custData = await custRes.json()
-  if (!custData.data?.length) {
-    return { encontrado: false, motivo: 'Cliente não encontrado no Stripe com esse e-mail.' }
-  }
-  const cliente = custData.data[0]
-
-  // 2. Get most recent charge
-  const chargeRes = await fetch(
-    `https://api.stripe.com/v1/charges?customer=${cliente.id}&limit=1`,
-    { headers: { Authorization: `Bearer ${stripeKey}` } }
-  )
-  const chargeData = await chargeRes.json()
-  if (!chargeData.data?.length) {
-    return { encontrado: false, motivo: 'Nenhuma cobrança encontrada para este cliente.' }
-  }
-  const cobranca = chargeData.data[0]
-
-  if (cobranca.refunded) {
-    return { encontrado: false, motivo: 'Este pagamento já foi reembolsado anteriormente.' }
-  }
-
-  // 3. Calculate days since purchase
-  const dataCompra = new Date(cobranca.created * 1000)
-  const dias = Math.floor((Date.now() - dataCompra.getTime()) / (1000 * 60 * 60 * 24))
-  const elegivel = dias <= PRAZO_DIAS
-
-  // 4. Check active subscriptions
-  const subRes = await fetch(
-    `https://api.stripe.com/v1/subscriptions?customer=${cliente.id}&status=active&limit=1`,
-    { headers: { Authorization: `Bearer ${stripeKey}` } }
-  )
-  const subData = await subRes.json()
-  const temAssinatura = subData.data?.length > 0
-  const assinaturaId = temAssinatura ? subData.data[0].id : null
-
-  return {
-    encontrado: true,
-    elegivel,
-    cliente_id: cliente.id,
-    cobranca_id: cobranca.id,
-    assinatura_id: assinaturaId,
-    tem_assinatura: temAssinatura,
-    nome: cliente.name || emailCliente,
-    email: emailCliente,
-    produto: cobranca.description || 'Não identificado',
-    valor: cobranca.amount / 100,
-    moeda: (cobranca.currency || 'brl').toUpperCase(),
-    data_compra: dataCompra.toLocaleDateString('pt-BR') + ' às ' + dataCompra.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
-    dias_passados: dias,
-    prazo_dias: PRAZO_DIAS,
-    motivo_inelegivel: !elegivel ? `Compra realizada há ${dias} dias (prazo máximo: ${PRAZO_DIAS} dias).` : '',
-  }
-}
-
-async function executarReembolso(cobrancaId: string, assinaturaId?: string) {
-  const stripeKey = Deno.env.get('STRIPE_SECRET_KEY')!
-
-  // Refund
-  const refundRes = await fetch('https://api.stripe.com/v1/refunds', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${stripeKey}`,
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
-    body: `charge=${cobrancaId}`,
-  })
-  const refund = await refundRes.json()
-
-  // Cancel subscription if exists
-  let assinaturaCancelada = false
-  if (assinaturaId) {
-    await fetch(`https://api.stripe.com/v1/subscriptions/${assinaturaId}`, {
-      method: 'DELETE',
-      headers: { Authorization: `Bearer ${stripeKey}` },
-    })
-    assinaturaCancelada = true
-  }
-
-  return {
-    sucesso: true,
-    reembolso_id: refund.id,
-    assinatura_cancelada: assinaturaCancelada,
-  }
-}
-
-// ─── Email classification ──────────────────────────────────────────
+// ─── Email processing ─────────────────────────────────────────────────────────
 async function classificarEmail(remetente: string, assunto: string, corpo: string, historico?: string, knowledgeContext?: string) {
   let conteudo = PROMPT_BASE
 
@@ -242,7 +144,7 @@ async function classificarEmail(remetente: string, assunto: string, corpo: strin
   }
 
   if (historico) {
-    conteudo += `\n\n=== HISTÓRICO DE INTERAÇÕES COM ESTE CLIENTE ===\n${historico}\n=== FIM DO HISTÓRICO ===\n\nUse o histórico acima para dar continuidade ao atendimento. Se o cliente já foi atendido antes, considere o contexto. Não repita informações já enviadas.`
+    conteudo += `\n\n=== HISTÓRICO DE INTERAÇÕES COM ESTE CLIENTE ===\n${historico}\n=== FIM DO HISTÓRICO ===\n\nUse o histórico acima para dar continuidade ao atendimento.`
   }
 
   conteudo += `\n\nDe: ${remetente}\nAssunto: ${assunto}\n\n${corpo}`
@@ -272,7 +174,6 @@ async function detectarFeedback(assunto: string, corpo: string) {
   return JSON.parse(texto)
 }
 
-// ─── Process a single email ────────────────────────────────────────
 async function processarEmail(remetente: string, assunto: string, corpo: string, historico?: string, knowledgeContext?: string) {
   const resultado = await classificarEmail(remetente, assunto, corpo, historico, knowledgeContext)
 
@@ -305,7 +206,285 @@ async function processarEmail(remetente: string, assunto: string, corpo: string,
   return resultado
 }
 
-// ─── Main handler ──────────────────────────────────────────────────
+// ─── Stripe ───────────────────────────────────────────────────────────────────
+async function analisarReembolso(emailCliente: string) {
+  const stripeKey = Deno.env.get('STRIPE_SECRET_KEY')!
+  const PRAZO_DIAS = 7
+
+  const custRes = await fetch(
+    `https://api.stripe.com/v1/customers?email=${encodeURIComponent(emailCliente)}&limit=1`,
+    { headers: { Authorization: `Bearer ${stripeKey}` } }
+  )
+  const custData = await custRes.json()
+  if (!custData.data?.length) {
+    return { encontrado: false, motivo: 'Cliente não encontrado no Stripe com esse e-mail.' }
+  }
+  const cliente = custData.data[0]
+
+  const chargeRes = await fetch(
+    `https://api.stripe.com/v1/charges?customer=${cliente.id}&limit=1`,
+    { headers: { Authorization: `Bearer ${stripeKey}` } }
+  )
+  const chargeData = await chargeRes.json()
+  if (!chargeData.data?.length) {
+    return { encontrado: false, motivo: 'Nenhuma cobrança encontrada para este cliente.' }
+  }
+  const cobranca = chargeData.data[0]
+
+  if (cobranca.refunded) {
+    return { encontrado: false, motivo: 'Este pagamento já foi reembolsado anteriormente.' }
+  }
+
+  const dataCompra = new Date(cobranca.created * 1000)
+  const dias = Math.floor((Date.now() - dataCompra.getTime()) / (1000 * 60 * 60 * 24))
+  const elegivel = dias <= PRAZO_DIAS
+
+  const subRes = await fetch(
+    `https://api.stripe.com/v1/subscriptions?customer=${cliente.id}&status=active&limit=1`,
+    { headers: { Authorization: `Bearer ${stripeKey}` } }
+  )
+  const subData = await subRes.json()
+  const temAssinatura = subData.data?.length > 0
+  const assinaturaId = temAssinatura ? subData.data[0].id : null
+
+  return {
+    encontrado: true,
+    elegivel,
+    cliente_id: cliente.id,
+    cobranca_id: cobranca.id,
+    assinatura_id: assinaturaId,
+    tem_assinatura: temAssinatura,
+    nome: cliente.name || emailCliente,
+    email: emailCliente,
+    produto: cobranca.description || 'Não identificado',
+    valor: cobranca.amount / 100,
+    moeda: (cobranca.currency || 'brl').toUpperCase(),
+    data_compra: dataCompra.toLocaleDateString('pt-BR') + ' às ' + dataCompra.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+    dias_passados: dias,
+    prazo_dias: PRAZO_DIAS,
+    motivo_inelegivel: !elegivel ? `Compra realizada há ${dias} dias (prazo máximo: ${PRAZO_DIAS} dias).` : '',
+  }
+}
+
+async function executarReembolso(cobrancaId: string, assinaturaId?: string) {
+  const stripeKey = Deno.env.get('STRIPE_SECRET_KEY')!
+
+  const refundRes = await fetch('https://api.stripe.com/v1/refunds', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${stripeKey}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: `charge=${cobrancaId}`,
+  })
+  const refund = await refundRes.json()
+
+  let assinaturaCancelada = false
+  if (assinaturaId) {
+    await fetch(`https://api.stripe.com/v1/subscriptions/${assinaturaId}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${stripeKey}` },
+    })
+    assinaturaCancelada = true
+  }
+
+  return {
+    sucesso: true,
+    reembolso_id: refund.id,
+    assinatura_cancelada: assinaturaCancelada,
+  }
+}
+
+// ─── SMTP send via nodemailer ─────────────────────────────────────────────────
+async function enviarEmailSMTP(para: string, assunto: string, corpo: string): Promise<void> {
+  // @ts-ignore — Deno npm compat
+  const nodemailer = (await import('npm:nodemailer@6')).default
+
+  const emailFrom = Deno.env.get('EMAIL')!
+  const transporter = nodemailer.createTransport({
+    host: Deno.env.get('SMTP_HOST') || 'smtpout.secureserver.net',
+    port: parseInt(Deno.env.get('SMTP_PORT') || '465'),
+    secure: true,
+    auth: {
+      user: emailFrom,
+      pass: Deno.env.get('EMAIL_PASSWORD')!,
+    },
+  })
+
+  const destino = para.includes('<') ? para.split('<')[1].replace('>', '').trim() : para.trim()
+
+  const corpoBR = corpo.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>')
+  const corpoHtml = `<html><body style="font-family:Arial,sans-serif;font-size:14px;color:#1a1a1a;line-height:1.6;"><div style="white-space:pre-wrap;">${corpoBR}</div>${ASSINATURA_HTML}</body></html>`
+
+  await transporter.sendMail({
+    from: `ABRAhub Suporte <${emailFrom}>`,
+    to: destino,
+    subject: `Re: ${assunto}`,
+    text: corpo,
+    html: corpoHtml,
+  })
+}
+
+// ─── IMAP full check cycle ─────────────────────────────────────────────────────
+async function runEmailCheck(supabase: any): Promise<{ processados: number; erros: number }> {
+  // @ts-ignore — Deno npm compat
+  const { ImapFlow } = await import('npm:imapflow@1')
+  // @ts-ignore
+  const { simpleParser } = await import('npm:mailparser@3')
+
+  const emailAccount = Deno.env.get('EMAIL')!
+
+  const client = new ImapFlow({
+    host: Deno.env.get('IMAP_HOST') || 'imap.secureserver.net',
+    port: parseInt(Deno.env.get('IMAP_PORT') || '993'),
+    secure: true,
+    auth: { user: emailAccount, pass: Deno.env.get('EMAIL_PASSWORD')! },
+    logger: false,
+    connectionTimeout: 15000,
+    greetingTimeout: 10000,
+    socketTimeout: 30000,
+  })
+
+  // Prevent unhandled error events from crashing the Deno process
+  client.on('error', (err: Error) => {
+    console.error('IMAP error event:', err.message)
+  })
+
+  await client.connect()
+  const lock = await client.getMailboxLock('INBOX')
+
+  let processados = 0
+  let erros = 0
+
+  // Collect messages first (avoid modifying mailbox while iterating)
+  const toSkip: number[] = []
+  const toDelete: number[] = []
+  const toProcess: Array<{ uid: number; remetente: string; assunto: string; corpo: string }> = []
+
+  try {
+    let count = 0
+    for await (const msg of client.fetch({ seen: false }, { envelope: true, source: true, uid: true })) {
+      if (count >= 15) break
+      count++
+
+      const fromAddr = msg.envelope.from?.[0]?.address || ''
+      const fromName = msg.envelope.from?.[0]?.name || ''
+      const remetente = fromName ? `${fromName} <${fromAddr}>` : fromAddr
+
+      // Skip own emails
+      if (fromAddr.toLowerCase() === emailAccount.toLowerCase()) {
+        toSkip.push(msg.uid as number)
+        continue
+      }
+
+      // Skip and delete no-reply emails
+      if (NO_REPLY_PATTERNS.some(p => fromAddr.toLowerCase().includes(p))) {
+        toDelete.push(msg.uid as number)
+        continue
+      }
+
+      try {
+        const parsed = await simpleParser(msg.source)
+        toProcess.push({
+          uid: msg.uid as number,
+          remetente,
+          assunto: parsed.subject || '(sem assunto)',
+          corpo: parsed.text?.trim() || '',
+        })
+      } catch {
+        toSkip.push(msg.uid as number)
+      }
+    }
+
+    // Mark skipped as seen
+    for (const uid of toSkip) {
+      await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true })
+    }
+
+    // Mark no-reply as seen + deleted
+    for (const uid of toDelete) {
+      await client.messageFlagsAdd(uid, ['\\Seen', '\\Deleted'], { uid: true })
+    }
+
+    // Load global knowledge base
+    const { data: knowledgeDocs } = await supabase
+      .from('ai_knowledge_base')
+      .select('name, content')
+      .order('created_at', { ascending: true })
+
+    const knowledgeContext = knowledgeDocs && knowledgeDocs.length > 0
+      ? knowledgeDocs.map((d: any) => `--- ${d.name} ---\n${d.content}`).join('\n\n')
+      : undefined
+
+    // Process each email
+    for (const em of toProcess) {
+      try {
+        // Check if it's feedback
+        const feedback = await detectarFeedback(em.assunto, em.corpo)
+        if (feedback.eh_feedback) {
+          await supabase.from('email_feedbacks').insert({
+            email_from: em.remetente,
+            motivo: feedback.motivo || '',
+            feedback: em.corpo,
+          })
+        } else {
+          // Fetch previous interactions for context
+          const emailClean = extrairEmail(em.remetente)
+          const { data: prevTasks } = await supabase
+            .from('email_tasks')
+            .select('email_subject, tipo, email_sent, created_at')
+            .ilike('email_from', `%${emailClean}%`)
+            .order('created_at', { ascending: false })
+            .limit(5)
+
+          let historico = ''
+          if (prevTasks && prevTasks.length > 0) {
+            historico = [...prevTasks].reverse().map((t: any) => {
+              const data = new Date(t.created_at).toLocaleDateString('pt-BR')
+              return `[${data}] Assunto: ${t.email_subject} | Tipo: ${t.tipo}\nResposta enviada: ${t.email_sent || '(sem resposta)'}`
+            }).join('\n\n---\n\n')
+          }
+
+          const resultado = await processarEmail(em.remetente, em.assunto, em.corpo, historico || undefined, knowledgeContext)
+
+          await supabase.from('email_tasks').insert({
+            email_from: em.remetente,
+            email_subject: em.assunto,
+            tipo: resultado.tipo,
+            description: resultado.descricao_tarefa || '',
+            email_sent: resultado.resposta_email,
+            email_body: em.corpo,
+            precisa_acao: resultado.precisa_acao_manual,
+            status: resultado.precisa_acao_manual ? 'pending' : 'auto',
+          })
+        }
+
+        // Mark as seen and move to Respondidos
+        await client.messageFlagsAdd(em.uid, ['\\Seen'], { uid: true })
+        try {
+          await client.messageMove(em.uid, PASTA_RESPONDIDOS, { uid: true })
+        } catch {
+          try {
+            await client.mailboxCreate(PASTA_RESPONDIDOS)
+            await client.messageMove(em.uid, PASTA_RESPONDIDOS, { uid: true })
+          } catch { /* ignore if move fails */ }
+        }
+
+        processados++
+      } catch (e: any) {
+        erros++
+        console.error('Erro ao processar email:', e.message)
+      }
+    }
+  } finally {
+    lock.release()
+    await client.logout()
+  }
+
+  return { processados, erros }
+}
+
+// ─── Main handler ─────────────────────────────────────────────────────────────
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
@@ -321,7 +500,6 @@ serve(async (req) => {
 
   try {
     // GET /tasks — list tasks and stats
-    // ?days=7 for last 7 days, default=0 (today only)
     if (req.method === 'GET' && (path === '/tasks' || path === '' || path === '/')) {
       const days = parseInt(url.searchParams.get('days') || '0')
       const since = new Date()
@@ -336,19 +514,18 @@ serve(async (req) => {
 
       const allTasks = tasks || []
 
-      // Count previous interactions per sender (beyond the current result set)
-      const senderEmails = [...new Set(allTasks.map((t: any) => extrairEmail(t.email_from)))]
+      // Single query to fetch all historical tasks (avoids N+1)
+      const { data: historicalTasks } = await supabase
+        .from('email_tasks')
+        .select('email_from')
+        .lt('created_at', sinceStr + 'T00:00:00')
+
       const historyCounts: Record<string, number> = {}
-      for (const email of senderEmails) {
-        const { count } = await supabase
-          .from('email_tasks')
-          .select('*', { count: 'exact', head: true })
-          .ilike('email_from', `%${email}%`)
-          .lt('created_at', sinceStr + 'T00:00:00')
-        historyCounts[email] = count || 0
+      for (const t of historicalTasks || []) {
+        const email = extrairEmail(t.email_from)
+        historyCounts[email] = (historyCounts[email] || 0) + 1
       }
 
-      // Attach history_count to each task
       const tasksWithHistory = allTasks.map((t: any) => ({
         ...t,
         history_count: historyCounts[extrairEmail(t.email_from)] || 0,
@@ -393,11 +570,56 @@ serve(async (req) => {
       })
     }
 
-    // POST /process — process a single email (called from frontend or IMAP proxy)
+    // POST /run — trigger full IMAP check cycle
+    if (req.method === 'POST' && path === '/run') {
+      try {
+        const result = await runEmailCheck(supabase)
+        return new Response(JSON.stringify({ sucesso: true, ...result }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        })
+      } catch (e: any) {
+        return new Response(JSON.stringify({ sucesso: false, erro: e.message }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        })
+      }
+    }
+
+    // POST /send/:id — send email reply via SMTP
+    if (req.method === 'POST' && path.startsWith('/send/')) {
+      const id = path.split('/send/')[1]
+      const body = await req.json().catch(() => ({}))
+      const emailSentOverride = body.email_sent
+
+      const { data: task } = await supabase.from('email_tasks').select('*').eq('id', id).single()
+      if (!task) {
+        return new Response(JSON.stringify({ sucesso: false, erro: 'Tarefa não encontrada' }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        })
+      }
+
+      const corpoFinal = emailSentOverride || task.email_sent
+
+      // Persist edited draft if changed
+      if (emailSentOverride && emailSentOverride !== task.email_sent) {
+        await supabase.from('email_tasks').update({ email_sent: corpoFinal }).eq('id', id)
+      }
+
+      await enviarEmailSMTP(task.email_from, task.email_subject, corpoFinal)
+
+      // Auto tasks become done after sending
+      if (task.status === 'auto') {
+        await supabase.from('email_tasks').update({ status: 'done' }).eq('id', id)
+      }
+
+      return new Response(JSON.stringify({ sucesso: true }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
+    }
+
+    // POST /process — process a single email (called from external or IMAP proxy)
     if (req.method === 'POST' && path === '/process') {
       const { remetente, assunto, corpo } = await req.json()
 
-      // Check if it's feedback first
       const feedback = await detectarFeedback(assunto, corpo)
       if (feedback.eh_feedback) {
         await supabase.from('email_feedbacks').insert({
@@ -410,7 +632,6 @@ serve(async (req) => {
         })
       }
 
-      // Load global knowledge base
       const { data: knowledgeDocs } = await supabase
         .from('ai_knowledge_base')
         .select('name, content')
@@ -420,7 +641,6 @@ serve(async (req) => {
         ? knowledgeDocs.map((d: any) => `--- ${d.name} ---\n${d.content}`).join('\n\n')
         : undefined
 
-      // Fetch previous interactions with this sender
       const emailClean = extrairEmail(remetente)
       const { data: prevTasks } = await supabase
         .from('email_tasks')
@@ -431,13 +651,12 @@ serve(async (req) => {
 
       let historico = ''
       if (prevTasks && prevTasks.length > 0) {
-        historico = prevTasks.reverse().map((t: any) => {
+        historico = [...prevTasks].reverse().map((t: any) => {
           const data = new Date(t.created_at).toLocaleDateString('pt-BR')
           return `[${data}] Assunto: ${t.email_subject} | Tipo: ${t.tipo}\nResposta enviada: ${t.email_sent || '(sem resposta)'}`
         }).join('\n\n---\n\n')
       }
 
-      // Process as support email
       const resultado = await processarEmail(remetente, assunto, corpo, historico || undefined, knowledgeContext)
 
       const status = resultado.precisa_acao_manual ? 'pending' : 'auto'
@@ -447,6 +666,7 @@ serve(async (req) => {
         tipo: resultado.tipo,
         description: resultado.descricao_tarefa || '',
         email_sent: resultado.resposta_email,
+        email_body: corpo,
         precisa_acao: resultado.precisa_acao_manual,
         status,
       })

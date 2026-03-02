@@ -23,6 +23,7 @@ import {
   Moon,
   ChevronLeft,
   Bell,
+  Radar,
 } from 'lucide-react'
 import { useState, useEffect, useRef } from 'react'
 import { supabase } from '@/integrations/supabase'
@@ -118,6 +119,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
     { label: t('nav.human_agent'), icon: MessageCircle, path: '/human-agent' },
     { label: t('nav.leads'), icon: Users, path: '/leads' },
     { label: t('nav.insta_ninja'), icon: Bot, path: '/insta-ninja' },
+    { label: 'Content Radar', icon: Radar, path: '/content-radar' },
     { label: t('nav.youtube'), icon: Youtube, path: '/social' },
     { label: t('nav.ads_manager'), icon: Megaphone, path: '/ads' },
     { label: t('nav.email_agent'), icon: Mail, path: '/email-agent' },
