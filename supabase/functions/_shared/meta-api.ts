@@ -41,7 +41,33 @@ export async function metaPost(
   try {
     const data = JSON.parse(text)
     if (data.error) {
-      throw new Error(`Meta API error: ${data.error.message || JSON.stringify(data.error)}`)
+      throw new Error(`Meta API error: ${JSON.stringify(data.error)}`)
+    }
+    return data
+  } catch (e) {
+    if (e instanceof SyntaxError) {
+      throw new Error(`Meta API returned non-JSON (${res.status}): ${text.substring(0, 200)}`)
+    }
+    throw e
+  }
+}
+
+// Use this for calls that need proper JSON types (arrays, objects, numbers)
+export async function metaPostJson(
+  endpoint: string,
+  params: Record<string, unknown>,
+  accessToken: string
+): Promise<Record<string, unknown>> {
+  const res = await fetch(`${GRAPH_API}/${endpoint}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...params, access_token: accessToken }),
+  })
+  const text = await res.text()
+  try {
+    const data = JSON.parse(text)
+    if (data.error) {
+      throw new Error(`Meta API error: ${JSON.stringify(data.error)}`)
     }
     return data
   } catch (e) {

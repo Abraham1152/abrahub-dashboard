@@ -195,32 +195,67 @@ async function processComment(
         }
       }
 
-      // 5. Send DM (private reply via comment_id)
+      // 5. Upsert lead FIRST so we get the lead ID for ref tracking
+      const { error: leadErr } = await supabase.rpc('upsert_lead', {
+        p_username: comment.username,
+        p_ig_user_id: null,
+        p_source: 'automation_comment',
+        p_source_automation_id: automation.id,
+      })
+      if (leadErr) {
+        console.error('[WEBHOOK] Lead upsert error:', leadErr.message)
+      }
+
+      // Fetch the lead ID so we can inject ?ref= into the dm_link
+      const { data: leadRow } = await supabase
+        .from('instagram_leads')
+        .select('id')
+        .eq('username', comment.username)
+        .maybeSingle()
+      const leadId = leadRow?.id as string | null
+
+      // 6. Send DM (private reply via comment_id)
       const dmMessage = automation.dm_message as string
-      const dmLink = automation.dm_link as string
+      const rawDmLink = automation.dm_link as string
       const dmButtons = (automation.dm_buttons as Array<{ url: string; title: string }>) || []
+
+      // Inject ?ref={leadId} into dm_link for conversion tracking
+      let trackedDmLink = rawDmLink
+      if (rawDmLink && leadId) {
+        try {
+          const u = new URL(rawDmLink)
+          u.searchParams.set('ref', leadId)
+          trackedDmLink = u.toString()
+        } catch {
+          trackedDmLink = rawDmLink.includes('?')
+            ? `${rawDmLink}&ref=${leadId}`
+            : `${rawDmLink}?ref=${leadId}`
+        }
+      }
 
       if (dmMessage || dmButtons.length > 0) {
         try {
           let messagePayload: Record<string, unknown>
 
           if (dmButtons.length > 0) {
+            // If button URL is missing/invalid, fall back to the tracked dm_link
+            const resolvedButtons = dmButtons.map(btn => ({
+              type: 'web_url',
+              url: (btn.url && btn.url.startsWith('https://')) ? btn.url : trackedDmLink || rawDmLink || btn.url,
+              title: btn.title,
+            }))
             messagePayload = {
               attachment: {
                 type: 'template',
                 payload: {
                   template_type: 'button',
                   text: dmMessage || 'Confira:',
-                  buttons: dmButtons.map(btn => ({
-                    type: 'web_url',
-                    url: btn.url,
-                    title: btn.title,
-                  })),
+                  buttons: resolvedButtons,
                 },
               },
             }
           } else {
-            const fullDmText = dmLink ? `${dmMessage}\n\n${dmLink}` : dmMessage
+            const fullDmText = trackedDmLink ? `${dmMessage}\n\n${trackedDmLink}` : dmMessage
             messagePayload = { text: fullDmText }
           }
 
@@ -264,6 +299,16 @@ async function processComment(
           } else {
             actionTaken += actionTaken ? '+dm' : 'dm'
             console.log(`[WEBHOOK] DM sent to @${comment.username}`)
+
+            // Mark lead as tracked if we sent a link with ref
+            if (leadId && trackedDmLink !== rawDmLink) {
+              await supabase.from('instagram_leads').update({
+                tracked_link_sent: true,
+                tracked_product_id: automation.id,
+                status: 'negotiating',
+                updated_at: new Date().toISOString(),
+              }).eq('id', leadId).not('status', 'eq', 'converted')
+            }
           }
         } catch (e) {
           errorMessage += `DM exception: ${e instanceof Error ? e.message : 'unknown'}; `
@@ -273,7 +318,7 @@ async function processComment(
 
       if (!actionTaken) actionTaken = 'none'
 
-      // 6. Log the processed comment
+      // 7. Log the processed comment
       await supabase.from('instagram_processed_comments').insert({
         comment_id: comment.commentId,
         automation_id: automation.id,
@@ -284,18 +329,7 @@ async function processComment(
         error_message: errorMessage || null,
       })
 
-      // 7. Upsert lead for this commenter
-      const { error: leadErr } = await supabase.rpc('upsert_lead', {
-        p_username: comment.username,
-        p_ig_user_id: null,
-        p_source: 'automation_comment',
-        p_source_automation_id: automation.id,
-      })
-      if (leadErr) {
-        console.error('[WEBHOOK] Lead upsert error:', leadErr.message)
-      }
-
-      console.log(`[WEBHOOK] Done processing comment ${comment.commentId}: action=${actionTaken}, status=${status}`)
+      console.log(`[WEBHOOK] Done processing comment ${comment.commentId}: action=${actionTaken}, status=${status}, ref=${leadId || 'none'}`)
     }
   } catch (error) {
     console.error('[WEBHOOK] processComment error:', error instanceof Error ? error.message : error)

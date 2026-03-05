@@ -237,6 +237,31 @@ export default function HomePage() {
   const profit = netRevenue - totalExpenses
   const avgDaily = days > 0 ? grossRevenue / days : 0
 
+  // UTM attribution breakdown from transaction metadata
+  const utmSourceBreakdown = (() => {
+    const sources: Record<string, { revenue: number; count: number }> = {}
+    for (const tx of paidTx) {
+      const src = (tx as any).metadata?.utm_source as string | null
+      if (!src) continue
+      if (!sources[src]) sources[src] = { revenue: 0, count: 0 }
+      sources[src].revenue += Math.abs((tx as any).amount)
+      sources[src].count++
+    }
+    return Object.entries(sources).sort((a, b) => b[1].revenue - a[1].revenue)
+  })()
+
+  const utmCampaignBreakdown = (() => {
+    const campaigns: Record<string, { revenue: number; count: number; source: string }> = {}
+    for (const tx of paidTx) {
+      const campaign = (tx as any).metadata?.utm_campaign as string | null
+      if (!campaign) continue
+      if (!campaigns[campaign]) campaigns[campaign] = { revenue: 0, count: 0, source: (tx as any).metadata?.utm_source || '' }
+      campaigns[campaign].revenue += Math.abs((tx as any).amount)
+      campaigns[campaign].count++
+    }
+    return Object.entries(campaigns).sort((a, b) => b[1].revenue - a[1].revenue).slice(0, 8)
+  })()
+
   // Churn (cancellations + refunds from all sources in the selected period)
   const churnCount = refundTx.length
   const totalTxCount = paidTx.length + refundTx.length
@@ -490,6 +515,70 @@ export default function HomePage() {
           <SideCard label={t('home.net_revenue')} value={BRL(netRevenue)} color="violet" pct={grossRevenue > 0 ? netRevenue / grossRevenue * 100 : 100} />
         </div>
       </div>
+
+      {/* UTM Attribution */}
+      {(utmSourceBreakdown.length > 0 || utmCampaignBreakdown.length > 0) && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* By Source */}
+          {utmSourceBreakdown.length > 0 && (
+            <div className="card p-5">
+              <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-4">Receita por Origem (UTM)</h3>
+              <div className="space-y-3">
+                {utmSourceBreakdown.map(([src, data]) => {
+                  const pct = netRevenue > 0 ? (data.revenue / netRevenue) * 100 : 0
+                  return (
+                    <div key={src}>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-xs font-medium text-gray-700 dark:text-neutral-300">{src}</span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] text-gray-400 dark:text-neutral-500">{data.count} venda{data.count !== 1 ? 's' : ''}</span>
+                          <span className="text-xs font-bold text-gray-900 dark:text-white">{BRL(data.revenue)}</span>
+                        </div>
+                      </div>
+                      <div className="h-1.5 bg-gray-100 dark:bg-neutral-800 rounded-full overflow-hidden">
+                        <div className="h-full rounded-full bg-orange-500" style={{ width: `${Math.min(pct, 100)}%` }} />
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* By Campaign */}
+          {utmCampaignBreakdown.length > 0 && (
+            <div className="card p-5">
+              <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-4">Top Campanhas (UTM)</h3>
+              <div className="space-y-2">
+                {utmCampaignBreakdown.map(([campaign, data]) => {
+                  const pct = netRevenue > 0 ? (data.revenue / netRevenue) * 100 : 0
+                  return (
+                    <div key={campaign}>
+                      <div className="flex items-center justify-between mb-1">
+                        <div className="flex items-center gap-2 min-w-0">
+                          {data.source && (
+                            <span className="flex-shrink-0 px-1.5 py-0.5 rounded text-[9px] font-medium bg-gray-100 dark:bg-neutral-800 text-gray-500 dark:text-neutral-500">
+                              {data.source}
+                            </span>
+                          )}
+                          <span className="text-xs font-medium text-gray-700 dark:text-neutral-300 truncate">{campaign}</span>
+                        </div>
+                        <div className="flex items-center gap-2 flex-shrink-0 ml-2">
+                          <span className="text-[10px] text-gray-400 dark:text-neutral-500">{data.count}x</span>
+                          <span className="text-xs font-bold text-gray-900 dark:text-white">{BRL(data.revenue)}</span>
+                        </div>
+                      </div>
+                      <div className="h-1 bg-gray-100 dark:bg-neutral-800 rounded-full overflow-hidden">
+                        <div className="h-full rounded-full bg-blue-500" style={{ width: `${Math.min(pct, 100)}%` }} />
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Alerts */}
       {isChurnHigh && (

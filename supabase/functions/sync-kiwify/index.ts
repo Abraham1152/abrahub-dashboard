@@ -130,7 +130,10 @@ serve(async (req) => {
             ref: sale.tracking?.ref || sale.metadata?.ref || null,
             src: sale.tracking?.src || null,
             utm_source: sale.tracking?.utm_source || sale.utm_source || null,
-            utm_content: sale.tracking?.utm_content || null,
+            utm_medium: sale.tracking?.utm_medium || sale.utm_medium || null,
+            utm_campaign: sale.tracking?.utm_campaign || sale.utm_campaign || null,
+            utm_term: sale.tracking?.utm_term || sale.utm_term || null,
+            utm_content: sale.tracking?.utm_content || sale.utm_content || null,
           },
         })
       }

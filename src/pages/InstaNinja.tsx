@@ -142,6 +142,32 @@ export default function InstaNinjaPage() {
     },
   })
 
+  // Fetch conversion stats per automation
+  const { data: automationStats = [] } = useQuery({
+    queryKey: ['instagram-automation-stats'],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from('instagram_leads')
+        .select('source_automation_id, status, conversion_value')
+        .not('source_automation_id', 'is', null)
+      return data || []
+    },
+  })
+
+  // Map: automation_id -> { leads, converted, revenue }
+  const statsMap = new Map<string, { leads: number; converted: number; revenue: number }>()
+  for (const row of automationStats) {
+    const id = row.source_automation_id as string
+    if (!id) continue
+    const cur = statsMap.get(id) || { leads: 0, converted: 0, revenue: 0 }
+    cur.leads++
+    if (row.status === 'converted') {
+      cur.converted++
+      cur.revenue += (row.conversion_value as number) || 0
+    }
+    statsMap.set(id, cur)
+  }
+
   // Map: media_id -> automation
   const automationMap = new Map(automations.map(a => [a.media_id, a]))
 
@@ -241,6 +267,7 @@ export default function InstaNinjaPage() {
         <PostsGrid
           posts={posts}
           automationMap={automationMap}
+          statsMap={statsMap}
           onConfigure={setEditingPost}
         />
       ) : (
@@ -294,9 +321,10 @@ function StatCard({ icon: Icon, label, value, color }: {
 
 // ==================== POSTS GRID ====================
 
-function PostsGrid({ posts, automationMap, onConfigure }: {
+function PostsGrid({ posts, automationMap, statsMap, onConfigure }: {
   posts: InstagramPost[]
   automationMap: Map<string, Automation>
+  statsMap: Map<string, { leads: number; converted: number; revenue: number }>
   onConfigure: (post: InstagramPost) => void
 }) {
   const { t } = useTranslation()
@@ -317,6 +345,7 @@ function PostsGrid({ posts, automationMap, onConfigure }: {
         const automation = automationMap.get(post.media_id)
         const isActive = automation?.is_active || false
         const hasAutomation = !!automation
+        const convStats = automation ? (statsMap.get(automation.id) || null) : null
 
         return (
           <div
@@ -411,6 +440,26 @@ function PostsGrid({ posts, automationMap, onConfigure }: {
                   {automation.keywords.length > 3 && (
                     <span className="text-[9px] text-gray-400 dark:text-neutral-500">+{automation.keywords.length - 3}</span>
                   )}
+                </div>
+              )}
+
+              {/* Conversion stats */}
+              {convStats && convStats.leads > 0 && (
+                <div className="mt-2 pt-2 border-t border-gray-100 dark:border-neutral-800 grid grid-cols-3 gap-1 text-center">
+                  <div>
+                    <p className="text-[10px] font-bold text-gray-900 dark:text-white">{convStats.leads}</p>
+                    <p className="text-[8px] text-gray-400 dark:text-neutral-600">leads</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-bold text-green-600 dark:text-green-400">{convStats.converted}</p>
+                    <p className="text-[8px] text-gray-400 dark:text-neutral-600">conversões</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-bold text-blue-600 dark:text-blue-400">
+                      {convStats.revenue > 0 ? `R$${convStats.revenue.toFixed(0)}` : '-'}
+                    </p>
+                    <p className="text-[8px] text-gray-400 dark:text-neutral-600">receita</p>
+                  </div>
                 </div>
               )}
             </div>
@@ -705,44 +754,53 @@ function AutomationModal({ post, existingAutomation, onClose }: {
 
             {/* Add new button */}
             {dmButtons.length < 3 && (
-              <div className="flex gap-2">
-                <input
-                  type="url"
-                  value={newButtonUrl}
-                  onChange={e => setNewButtonUrl(e.target.value)}
-                  placeholder="https://abrahub.com/live"
-                  className={`${inputClass} flex-1`}
-                />
+              <div className="space-y-2">
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={newButtonTitle}
+                    onChange={e => setNewButtonTitle(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault()
+                        if (newButtonTitle.trim()) {
+                          const url = newButtonUrl.trim() || dmLink.trim()
+                          if (url) {
+                            setDmButtons([...dmButtons, { url, title: newButtonTitle.trim() }])
+                            setNewButtonUrl('')
+                            setNewButtonTitle('')
+                          }
+                        }
+                      }
+                    }}
+                    placeholder="Texto do botão (ex: Acesse agora)"
+                    className={`${inputClass} flex-1`}
+                    maxLength={30}
+                  />
+                  <button
+                    onClick={() => {
+                      if (newButtonTitle.trim()) {
+                        const url = newButtonUrl.trim() || dmLink.trim()
+                        if (url) {
+                          setDmButtons([...dmButtons, { url, title: newButtonTitle.trim() }])
+                          setNewButtonUrl('')
+                          setNewButtonTitle('')
+                        }
+                      }
+                    }}
+                    disabled={!newButtonTitle.trim() || (!newButtonUrl.trim() && !dmLink.trim())}
+                    className="px-4 py-2.5 rounded-xl bg-pink-600 text-white text-sm font-medium hover:bg-pink-700 transition-colors flex-shrink-0 disabled:opacity-40"
+                  >
+                    <Plus size={16} />
+                  </button>
+                </div>
                 <input
                   type="text"
-                  value={newButtonTitle}
-                  onChange={e => setNewButtonTitle(e.target.value)}
-                  onKeyDown={e => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault()
-                      if (newButtonUrl.trim() && newButtonTitle.trim()) {
-                        setDmButtons([...dmButtons, { url: newButtonUrl.trim(), title: newButtonTitle.trim() }])
-                        setNewButtonUrl('')
-                        setNewButtonTitle('')
-                      }
-                    }
-                  }}
-                  placeholder="Titulo do botao"
-                  className={`${inputClass} w-40`}
-                  maxLength={30}
+                  value={newButtonUrl}
+                  onChange={e => setNewButtonUrl(e.target.value)}
+                  placeholder={dmLink.trim() ? `URL do botão (vazio = usa o Link simples)` : 'URL do botão (ex: https://abrahub.com/...)'}
+                  className={`${inputClass} text-xs`}
                 />
-                <button
-                  onClick={() => {
-                    if (newButtonUrl.trim() && newButtonTitle.trim()) {
-                      setDmButtons([...dmButtons, { url: newButtonUrl.trim(), title: newButtonTitle.trim() }])
-                      setNewButtonUrl('')
-                      setNewButtonTitle('')
-                    }
-                  }}
-                  className="px-4 py-2.5 rounded-xl bg-pink-600 text-white text-sm font-medium hover:bg-pink-700 transition-colors flex-shrink-0"
-                >
-                  <Plus size={16} />
-                </button>
               </div>
             )}
           </div>

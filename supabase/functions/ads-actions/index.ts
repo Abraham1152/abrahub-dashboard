@@ -1,9 +1,9 @@
 import { serve } from 'https://deno.land/std@0.208.0/http/server.ts'
 import { getServiceClient, jsonResponse, corsHeaders } from '../_shared/supabase-client.ts'
-import { GRAPH_API, getMetaCredentials, metaPost, metaGet, rateLimit } from '../_shared/meta-api.ts'
-import { GEMINI_API, GEMINI_MODEL } from '../_shared/gemini.ts'
-const IG_ACCOUNT_ID = '17841451890607872'
-const PAGE_ID = '925935230607764'
+import { GRAPH_API, getMetaCredentials, metaPost, metaPostJson, metaGet, rateLimit } from '../_shared/meta-api.ts'
+import { callGemini } from '../_shared/gemini.ts'
+const IG_ACCOUNT_ID = Deno.env.get('INSTAGRAM_USER_ID') || '17841451890607872'
+const PAGE_ID = Deno.env.get('META_PAGE_ID') || '925935230607764'
 
 // ---------------------------------------------------------------------------
 // Helper: log an action to ads_agent_actions
@@ -135,11 +135,12 @@ async function handleCreateCampaign(
 
   // Step 1: Create Campaign
   await rateLimit()
-  const campaignResult = await metaPost(`${accountRef}/campaigns`, {
+  const campaignResult = await metaPostJson(`${accountRef}/campaigns`, {
     name,
     objective: 'OUTCOME_SALES',
     status: 'PAUSED',
-    special_ad_categories: '[]',
+    special_ad_categories: [],
+    is_adset_budget_sharing_enabled: false,
   }, accessToken)
 
   const campaignId = campaignResult.id as string
@@ -151,24 +152,25 @@ async function handleCreateCampaign(
 
   // Step 2: Create Ad Set
   await rateLimit()
-  const adsetParams: Record<string, string> = {
+  const adsetParams: Record<string, unknown> = {
     campaign_id: campaignId,
     name: `${name} - AdSet`,
-    daily_budget: String(Math.round(dailyBudget * 100)),
+    daily_budget: Math.round(dailyBudget * 100),
     billing_event: 'IMPRESSIONS',
     optimization_goal: 'OFFSITE_CONVERSIONS',
-    targeting: JSON.stringify(body.targeting || { geo_locations: { countries: ['BR'] } }),
+    bid_strategy: 'LOWEST_COST_WITHOUT_CAP',
+    targeting: body.targeting || { geo_locations: { countries: ['BR'] } },
     status: 'PAUSED',
   }
 
   if (body.pixel_id) {
-    adsetParams.promoted_object = JSON.stringify({
+    adsetParams.promoted_object = {
       pixel_id: body.pixel_id,
       custom_event_type: 'PURCHASE',
-    })
+    }
   }
 
-  const adsetResult = await metaPost(`${accountRef}/adsets`, adsetParams, accessToken)
+  const adsetResult = await metaPostJson(`${accountRef}/adsets`, adsetParams, accessToken)
   const adsetId = adsetResult.id as string
 
   await logAction(supabase, 'create_adset', campaignId, 'success', {
@@ -408,26 +410,18 @@ RESPONDA com este JSON exato:
   "reasoning": "Explicacao em portugues de por que essas escolhas"
 }`
 
-  const res = await fetch(
-    `${GEMINI_API}/${GEMINI_MODEL}:generateContent?key=${geminiKey}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        system_instruction: { parts: [{ text: systemPrompt }] },
-        contents: [{ role: 'user', parts: [{ text: 'Analise este post e sugira a estrategia ideal de campanha Meta Ads.' }] }],
-        generationConfig: { maxOutputTokens: 2048, temperature: 0.3 },
-      }),
-    }
-  )
+  const result = await callGemini(geminiKey, {
+    systemInstruction: systemPrompt,
+    contents: [{ role: 'user', parts: [{ text: 'Analise este post e sugira a estrategia ideal de campanha Meta Ads.' }] }],
+    maxOutputTokens: 4096,
+    temperature: 0.3,
+  })
 
-  const data = await res.json()
-  if (data.error) {
-    return jsonResponse({ error: `AI error: ${JSON.stringify(data.error).substring(0, 300)}` }, 500)
+  if (result.error || !result.text) {
+    return jsonResponse({ error: `AI error: ${result.error || 'no response'}` }, 500)
   }
 
-  let answer = data.candidates?.[0]?.content?.parts?.[0]?.text || ''
-  answer = answer.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim()
+  let answer = result.text.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim()
 
   try {
     const strategy = JSON.parse(answer)
@@ -456,54 +450,102 @@ async function handleCreateFromPost(
   if (!campaignName) return jsonResponse({ error: 'campaign_name is required' }, 400)
   if (!dailyBudget || dailyBudget <= 0) return jsonResponse({ error: 'daily_budget must be positive' }, 400)
 
+  const mediaType = (body.media_type as string || '').toUpperCase()
+  const isVideo = mediaType === 'VIDEO' || mediaType === 'REELS'
+
   // Step 1: Create Campaign
   await rateLimit()
-  const campaignResult = await metaPost(`${accountRef}/campaigns`, {
-    name: campaignName,
-    objective: 'OUTCOME_TRAFFIC',
-    status: 'PAUSED',
-    special_ad_categories: '[]',
-  }, accessToken)
-  const campaignId = campaignResult.id as string
+  let campaignId: string
+  try {
+    const campaignResult = await metaPostJson(`${accountRef}/campaigns`, {
+      name: campaignName,
+      objective: 'OUTCOME_TRAFFIC',
+      status: 'PAUSED',
+      special_ad_categories: [],
+      is_adset_budget_sharing_enabled: false,
+    }, accessToken)
+    campaignId = campaignResult.id as string
+  } catch (e) {
+    throw new Error(`Passo 1 (Campanha): ${e instanceof Error ? e.message : e}`)
+  }
 
   await logAction(supabase, 'create_campaign', campaignId, 'success', {
-    name: campaignName,
-    objective: 'OUTCOME_TRAFFIC',
-    source: 'ai_ad_creator',
-    ig_media_id: igMediaId,
+    name: campaignName, objective: 'OUTCOME_TRAFFIC', source: 'ai_ad_creator', ig_media_id: igMediaId,
   }, source)
 
   // Step 2: Create AdSet
   await rateLimit()
-  const startTime = new Date()
-  startTime.setHours(startTime.getHours() + 1)
+  let adsetId: string
+  try {
+    const adsetResult = await metaPostJson(`${accountRef}/adsets`, {
+      campaign_id: campaignId,
+      name: `${campaignName} - AdSet`,
+      daily_budget: Math.round(dailyBudget * 100),
+      billing_event: 'IMPRESSIONS',
+      optimization_goal: 'LINK_CLICKS',
+      bid_strategy: 'LOWEST_COST_WITHOUT_CAP',
+      targeting: targeting || { geo_locations: { countries: ['BR'] } },
+      status: 'PAUSED',
+    }, accessToken)
+    adsetId = adsetResult.id as string
+  } catch (e) {
+    throw new Error(`Passo 2 (AdSet): ${e instanceof Error ? e.message : e}`)
+  }
 
-  const adsetResult = await metaPost(`${accountRef}/adsets`, {
-    campaign_id: campaignId,
-    name: `${campaignName} - AdSet`,
-    daily_budget: String(Math.round(dailyBudget * 100)),
-    billing_event: 'IMPRESSIONS',
-    optimization_goal: 'LINK_CLICKS',
-    targeting: JSON.stringify(targeting || { geo_locations: { countries: ['BR'] } }),
-    start_time: startTime.toISOString(),
-    status: 'PAUSED',
-    promoted_object: JSON.stringify({ page_id: PAGE_ID }),
-  }, accessToken)
-  const adsetId = adsetResult.id as string
+  await logAction(supabase, 'create_adset', campaignId, 'success', { adset_id: adsetId, daily_budget: dailyBudget }, source)
 
-  await logAction(supabase, 'create_adset', campaignId, 'success', {
-    adset_id: adsetId, daily_budget: dailyBudget,
-  }, source)
-
-  // Step 3: Create Ad Creative (using existing IG post)
+  // Step 3: Create Ad Creative
+  // For VIDEO posts: fetch the video URL from Instagram and upload to Meta first
   await rateLimit()
-  const creativeResult = await metaPost(`${accountRef}/adcreatives`, {
-    name: `${campaignName} - Creative`,
-    source_instagram_media_id: igMediaId,
-    instagram_actor_id: IG_ACCOUNT_ID,
-    call_to_action: JSON.stringify({ type: ctaType, value: { link: destinationUrl } }),
-  }, accessToken)
-  const creativeId = creativeResult.id as string
+  let creativeId: string
+  try {
+    let creativeParams: Record<string, unknown>
+
+    if (isVideo) {
+      // Fetch fresh video URL from Instagram API
+      const igToken = await (await import('../_shared/meta-token.ts')).getMetaToken('instagram')
+      const igMediaData = await metaGet(
+        `${GRAPH_API}/${igMediaId}?fields=media_url,thumbnail_url&access_token=${igToken}`
+      )
+      const videoUrl = igMediaData.media_url as string
+      const thumbnailUrl = igMediaData.thumbnail_url as string | undefined
+      if (!videoUrl) throw new Error('Não foi possível obter a URL do vídeo do Instagram')
+
+      // Upload video to Meta Ad Account
+      const videoUpload = await metaPostJson(`${accountRef}/advideos`, {
+        file_url: videoUrl,
+        title: campaignName,
+      }, accessToken)
+      const videoId = videoUpload.id as string
+      if (!videoId) throw new Error('Falha ao fazer upload do vídeo para o Meta')
+
+      const videoData: Record<string, unknown> = {
+        video_id: videoId,
+        title: campaignName,
+        call_to_action: { type: ctaType, value: { link: destinationUrl } },
+      }
+      if (thumbnailUrl) videoData.image_url = thumbnailUrl
+
+      creativeParams = {
+        name: `${campaignName} - Creative`,
+        object_story_spec: {
+          page_id: PAGE_ID,
+          video_data: videoData,
+        },
+      }
+    } else {
+      creativeParams = {
+        name: `${campaignName} - Creative`,
+        source_instagram_media_id: igMediaId,
+        call_to_action: { type: ctaType, value: { link: destinationUrl } },
+      }
+    }
+
+    const creativeResult = await metaPostJson(`${accountRef}/adcreatives`, creativeParams, accessToken)
+    creativeId = creativeResult.id as string
+  } catch (e) {
+    throw new Error(`Passo 3 (Criativo): ${e instanceof Error ? e.message : e}`)
+  }
 
   await logAction(supabase, 'create_ad_creative', campaignId, 'success', {
     creative_id: creativeId, ig_media_id: igMediaId, cta_type: ctaType,
@@ -511,13 +553,18 @@ async function handleCreateFromPost(
 
   // Step 4: Create Ad
   await rateLimit()
-  const adResult = await metaPost(`${accountRef}/ads`, {
-    name: `${campaignName} - Ad`,
-    adset_id: adsetId,
-    creative: JSON.stringify({ creative_id: creativeId }),
-    status: 'PAUSED',
-  }, accessToken)
-  const adId = adResult.id as string
+  let adId: string
+  try {
+    const adResult = await metaPostJson(`${accountRef}/ads`, {
+      name: `${campaignName} - Ad`,
+      adset_id: adsetId,
+      creative: { creative_id: creativeId },
+      status: 'PAUSED',
+    }, accessToken)
+    adId = adResult.id as string
+  } catch (e) {
+    throw new Error(`Passo 4 (Anuncio): ${e instanceof Error ? e.message : e}`)
+  }
 
   await logAction(supabase, 'create_ad', campaignId, 'success', {
     ad_id: adId, creative_id: creativeId, adset_id: adsetId, ig_media_id: igMediaId,
@@ -592,11 +639,12 @@ async function handleCreateFromUpload(
 
   // Step 2: Create Campaign
   await rateLimit()
-  const campaignResult = await metaPost(`${accountRef}/campaigns`, {
+  const campaignResult = await metaPostJson(`${accountRef}/campaigns`, {
     name: campaignName,
     objective: 'OUTCOME_TRAFFIC',
     status: 'PAUSED',
-    special_ad_categories: '[]',
+    special_ad_categories: [],
+    is_adset_budget_sharing_enabled: false,
   }, accessToken)
   const campaignId = campaignResult.id as string
 
@@ -609,19 +657,15 @@ async function handleCreateFromUpload(
 
   // Step 3: Create AdSet
   await rateLimit()
-  const startTime = new Date()
-  startTime.setHours(startTime.getHours() + 1)
-
-  const adsetResult = await metaPost(`${accountRef}/adsets`, {
+  const adsetResult = await metaPostJson(`${accountRef}/adsets`, {
     campaign_id: campaignId,
     name: `${campaignName} - AdSet`,
-    daily_budget: String(Math.round(dailyBudget * 100)),
+    daily_budget: Math.round(dailyBudget * 100),
     billing_event: 'IMPRESSIONS',
     optimization_goal: 'LINK_CLICKS',
-    targeting: JSON.stringify(targeting || { geo_locations: { countries: ['BR'] } }),
-    start_time: startTime.toISOString(),
+    bid_strategy: 'LOWEST_COST_WITHOUT_CAP',
+    targeting: targeting || { geo_locations: { countries: ['BR'] } },
     status: 'PAUSED',
-    promoted_object: JSON.stringify({ page_id: PAGE_ID }),
   }, accessToken)
   const adsetId = adsetResult.id as string
 
@@ -651,9 +695,9 @@ async function handleCreateFromUpload(
         },
       }
 
-  const creativeResult = await metaPost(`${accountRef}/adcreatives`, {
+  const creativeResult = await metaPostJson(`${accountRef}/adcreatives`, {
     name: `${campaignName} - Creative`,
-    object_story_spec: JSON.stringify(storySpec),
+    object_story_spec: storySpec,
   }, accessToken)
   const creativeId = creativeResult.id as string
 
@@ -665,10 +709,10 @@ async function handleCreateFromUpload(
 
   // Step 5: Create Ad
   await rateLimit()
-  const adResult = await metaPost(`${accountRef}/ads`, {
+  const adResult = await metaPostJson(`${accountRef}/ads`, {
     name: `${campaignName} - Ad`,
     adset_id: adsetId,
-    creative: JSON.stringify({ creative_id: creativeId }),
+    creative: { creative_id: creativeId },
     status: 'PAUSED',
   }, accessToken)
   const adId = adResult.id as string

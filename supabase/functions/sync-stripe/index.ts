@@ -118,6 +118,60 @@ serve(async (req) => {
       }
     }
 
+    // --- Helper: parse client_reference_id into UTM fields ---
+    // Format: source[_medium[_campaign[_content]]]
+    // Example: "instagram_reels_abril" → utm_source=instagram, utm_medium=reels, utm_campaign=abril
+    function parseClientRef(ref: string | null | undefined): {
+      utm_source: string | null
+      utm_medium: string | null
+      utm_campaign: string | null
+      utm_content: string | null
+    } {
+      if (!ref || ref.trim() === '') {
+        return { utm_source: null, utm_medium: null, utm_campaign: null, utm_content: null }
+      }
+      const parts = ref.trim().split('_')
+      return {
+        utm_source: parts[0] || null,
+        utm_medium: parts[1] || null,
+        utm_campaign: parts[2] || null,
+        utm_content: parts[3] || null,
+      }
+    }
+
+    // --- PRE-PASS: Fetch Checkout Sessions to map payment_intent → client_reference_id ---
+    const piToClientRef: Record<string, string> = {}
+    hasMore = true
+    startingAfter = undefined
+
+    while (hasMore) {
+      const params = new URLSearchParams({
+        'created[gte]': since.toString(),
+        'limit': '100',
+      })
+      if (startingAfter) params.set('starting_after', startingAfter)
+
+      const res = await fetch(`https://api.stripe.com/v1/checkout/sessions?${params}`, {
+        headers: { 'Authorization': `Bearer ${stripeKey}` },
+      })
+      const sessions = await res.json()
+      if (sessions.error) break
+
+      for (const session of sessions.data || []) {
+        const pi = typeof session.payment_intent === 'string'
+          ? session.payment_intent
+          : session.payment_intent?.id
+        if (pi && session.client_reference_id) {
+          piToClientRef[pi] = session.client_reference_id
+        }
+      }
+
+      hasMore = sessions.has_more
+      if (hasMore && sessions.data?.length > 0) {
+        startingAfter = sessions.data[sessions.data.length - 1].id
+      }
+    }
+
     // --- PASS 1: Fetch Charges ---
     const dailyRevenue: Record<string, { stripe: number; fees: number }> = {}
     hasMore = true
@@ -177,6 +231,17 @@ serve(async (req) => {
         }
         if (!productName || productName === 'null') productName = 'Pagamento Stripe'
 
+        // Resolve UTMs: prefer explicit metadata, fall back to client_reference_id parsing
+        const pi = typeof charge.payment_intent === 'string' ? charge.payment_intent : null
+        const clientRef = pi ? (piToClientRef[pi] || null) : null
+        const parsedRef = parseClientRef(clientRef)
+
+        const utmSource = charge.metadata?.utm_source || parsedRef.utm_source || null
+        const utmMedium = charge.metadata?.utm_medium || parsedRef.utm_medium || null
+        const utmCampaign = charge.metadata?.utm_campaign || parsedRef.utm_campaign || null
+        const utmTerm = charge.metadata?.utm_term || null
+        const utmContent = charge.metadata?.utm_content || parsedRef.utm_content || null
+
         // Upsert individual transaction
         const { error: upsertErr } = await supabase.from('revenue_transactions').upsert(
           {
@@ -192,6 +257,13 @@ serve(async (req) => {
               fee,
               payment_intent: charge.payment_intent || null,
               payment_method: charge.payment_method_details?.type || null,
+              utm_source: utmSource,
+              utm_medium: utmMedium,
+              utm_campaign: utmCampaign,
+              utm_term: utmTerm,
+              utm_content: utmContent,
+              ref: charge.metadata?.ref || charge.metadata?.reference || null,
+              client_reference_id: clientRef,
             },
           },
           { onConflict: 'transaction_id' }

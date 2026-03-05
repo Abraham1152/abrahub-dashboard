@@ -1498,7 +1498,7 @@ function AdCreatorWizard({ onClose, queryClient }: { onClose: () => void; queryC
           reach: selectedPost?.reach || 0,
           impressions: selectedPost?.impressions || 0,
         } : { likes: 0, comments: 0, reach: 0, impressions: 0 },
-      })
+      }, 120000)
       if (res.error) {
         setError(res.error)
       } else if (res.strategy) {
@@ -1559,7 +1559,7 @@ function AdCreatorWizard({ onClose, queryClient }: { onClose: () => void; queryC
           ? videoUrl
             ? { video_url: videoUrl, image_name: uploadFile?.name || 'ad.mp4', ad_message: adCaption }
             : { image_base64: uploadBase64, image_name: uploadFile?.name || 'ad.jpg', ad_message: adCaption }
-          : { ig_media_id: selectedPost!.media_id }),
+          : { ig_media_id: selectedPost!.media_id, media_type: selectedPost!.media_type }),
         destination_url: destinationUrl,
         campaign_name: s.campaign_name,
         daily_budget: s.daily_budget_brl,

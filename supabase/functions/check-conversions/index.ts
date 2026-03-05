@@ -50,7 +50,8 @@ serve(async (req) => {
         }
 
         if (matchedTransaction) {
-          // 4. Update lead as converted
+          // 4. Update lead as converted + populate UTM attribution from transaction metadata
+          const meta = (matchedTransaction.metadata as Record<string, unknown>) || {}
           await supabase.from('instagram_leads').update({
             status: 'converted',
             temperature: 'hot',
@@ -58,6 +59,12 @@ serve(async (req) => {
             converted_at: new Date().toISOString(),
             conversion_value: matchedTransaction.amount,
             customer_email: matchedTransaction.customer_email,
+            utm_source: meta.utm_source as string || null,
+            utm_medium: meta.utm_medium as string || null,
+            utm_campaign: meta.utm_campaign as string || null,
+            utm_term: meta.utm_term as string || null,
+            utm_content: meta.utm_content as string || null,
+            utm_ref: (meta.ref as string) || (meta.reference as string) || null,
             updated_at: new Date().toISOString(),
           }).eq('id', lead.id)
 
