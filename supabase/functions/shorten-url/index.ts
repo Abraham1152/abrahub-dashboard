@@ -35,9 +35,9 @@ serve(async (req) => {
       .single()
 
     if (existing?.code) {
-      const baseUrl = Deno.env.get('SUPABASE_URL')!
+      const SHORT_DOMAIN = 'https://abrahub.com/r'
       return new Response(
-        JSON.stringify({ short_url: `${baseUrl}/functions/v1/r/${existing.code}` }),
+        JSON.stringify({ short_url: `${SHORT_DOMAIN}/${existing.code}` }),
         { headers: { ...corsHeaders(), 'Content-Type': 'application/json' } },
       )
     }
@@ -58,9 +58,9 @@ serve(async (req) => {
       }
     }
 
-    const baseUrl = Deno.env.get('SUPABASE_URL')!
+    const SHORT_DOMAIN = 'https://abrahub.com/r'
     return new Response(
-      JSON.stringify({ short_url: `${baseUrl}/functions/v1/r/${code}` }),
+      JSON.stringify({ short_url: `${SHORT_DOMAIN}/${code}` }),
       { headers: { ...corsHeaders(), 'Content-Type': 'application/json' } },
     )
   } catch (err) {
