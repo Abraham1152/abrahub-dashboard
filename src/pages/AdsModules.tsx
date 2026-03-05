@@ -39,7 +39,8 @@ import {
 interface NormalizedCampaign {
   id: string; campaign_id: string; name: string; status: string; daily_budget: number | null;
   lifetime_budget?: number | null; impressions: number; clicks: number; spend: number; cpc: number;
-  cpm: number; ctr: number; conversions: number; cpa: number; campaign_type?: string | null; platform: 'meta' | 'google';
+  cpm: number; ctr: number; conversions: number; cpa: number; frequency: number;
+  campaign_tag: string; creative_theme: string | null; campaign_type?: string | null; platform: 'meta' | 'google';
 }
 
 const BRL = (n: number) => n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })

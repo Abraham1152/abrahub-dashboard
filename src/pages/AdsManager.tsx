@@ -81,6 +81,9 @@ interface AdsCampaign {
   ctr: number
   conversions: number
   cost_per_result: number
+  frequency: number
+  campaign_tag: string
+  creative_theme: string | null
   created_time: string | null
   updated_time: string | null
   last_synced_at: string
@@ -127,6 +130,9 @@ interface NormalizedCampaign {
   ctr: number
   conversions: number
   cpa: number
+  frequency: number
+  campaign_tag: string
+  creative_theme: string | null
   campaign_type?: string | null
   platform: 'meta' | 'google'
 }
@@ -211,6 +217,9 @@ function normalizeMetaCampaign(c: AdsCampaign): NormalizedCampaign {
     ctr: c.ctr,
     conversions: c.conversions,
     cpa: c.cost_per_result,
+    frequency: (c as any).frequency || 0,
+    campaign_tag: (c as any).campaign_tag || 'untagged',
+    creative_theme: (c as any).creative_theme || null,
     platform: 'meta',
   }
 }
@@ -230,6 +239,9 @@ function normalizeGoogleCampaign(c: GoogleAdsCampaign): NormalizedCampaign {
     ctr: c.ctr,
     conversions: c.conversions,
     cpa: c.cost_per_conversion,
+    frequency: 0,
+    campaign_tag: 'untagged',
+    creative_theme: null,
     campaign_type: c.campaign_type,
     platform: 'google',
   }
@@ -321,19 +333,6 @@ export default function AdsManagerPage() {
         .select('*')
         .order('created_at', { ascending: false })
         .limit(50)
-      return (data || []) as any[]
-    },
-  })
-
-  // Fetch business metrics
-  const { data: _businessMetrics = [] } = useQuery({
-    queryKey: ['ads-business-metrics'],
-    queryFn: async () => {
-      const { data } = await supabase
-        .from('ads_business_metrics' as any)
-        .select('*')
-        .order('date', { ascending: false })
-        .limit(30)
       return (data || []) as any[]
     },
   })
