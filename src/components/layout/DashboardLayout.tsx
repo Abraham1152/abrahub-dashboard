@@ -8,7 +8,6 @@ import { useTranslation } from '@/i18n/useTranslation'
 import {
   Home,
   Kanban,
-  FileText,
   LogOut,
   Menu,
   Youtube,
@@ -17,13 +16,14 @@ import {
   Bot,
   Megaphone,
   MessageCircle,
-  Mail,
   Users,
   Sun,
   Moon,
   ChevronLeft,
   Bell,
   Radar,
+  Link2,
+  BarChart2,
 } from 'lucide-react'
 import { useState, useEffect, useRef } from 'react'
 import { supabase } from '@/integrations/supabase'
@@ -118,12 +118,12 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
     { label: t('nav.financeiro'), icon: Wallet, path: '/financeiro' },
     { label: t('nav.human_agent'), icon: MessageCircle, path: '/human-agent' },
     { label: t('nav.leads'), icon: Users, path: '/leads' },
+    { label: 'Gerar Links', icon: Link2, path: '/utm-builder' },
+    { label: 'UTM Analytics', icon: BarChart2, path: '/utm-analytics' },
     { label: t('nav.insta_ninja'), icon: Bot, path: '/insta-ninja' },
     { label: 'Content Radar', icon: Radar, path: '/content-radar' },
     { label: t('nav.youtube'), icon: Youtube, path: '/social' },
     { label: t('nav.ads_manager'), icon: Megaphone, path: '/ads' },
-    { label: t('nav.email_agent'), icon: Mail, path: '/email-agent' },
-    { label: t('nav.decisions'), icon: FileText, path: '/decisions' },
     { label: t('nav.expenses'), icon: Receipt, path: '/gastos' },
   ]
 

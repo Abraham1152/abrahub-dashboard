@@ -17,6 +17,8 @@ import EmailAgentPage from '@/pages/EmailAgent'
 import LeadsPage from '@/pages/Leads'
 import PrivacyPage from '@/pages/Privacy'
 import ContentRadarPage from '@/pages/ContentRadar'
+import UTMBuilderPage from '@/pages/UTMBuilder'
+import UTMAnalyticsPage from '@/pages/UTMAnalytics'
 
 function AuthenticatedApp() {
   return (
@@ -35,6 +37,8 @@ function AuthenticatedApp() {
         <Route path="/email-agent" element={<EmailAgentPage />} />
         <Route path="/leads" element={<LeadsPage />} />
         <Route path="/content-radar" element={<ContentRadarPage />} />
+        <Route path="/utm-builder" element={<UTMBuilderPage />} />
+        <Route path="/utm-analytics" element={<UTMAnalyticsPage />} />
         <Route path="*" element={<Navigate to="/" />} />
       </Routes>
     </DashboardLayout>
