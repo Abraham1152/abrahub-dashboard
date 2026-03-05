@@ -1,5 +1,14 @@
 import { serve } from 'https://deno.land/std@0.208.0/http/server.ts'
-import { corsHeaders } from '../_shared/supabase-client.ts'
+import { getServiceClient, corsHeaders } from '../_shared/supabase-client.ts'
+
+function generateCode(length = 6): string {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789'
+  let code = ''
+  for (let i = 0; i < length; i++) {
+    code += chars[Math.floor(Math.random() * chars.length)]
+  }
+  return code
+}
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -15,50 +24,49 @@ serve(async (req) => {
       })
     }
 
-    // Try TinyURL (most reliable, no API key needed)
-    try {
-      const res = await fetch(
-        `https://tinyurl.com/api-create.php?url=${encodeURIComponent(url)}`
-      )
-      if (res.ok) {
-        const text = await res.text()
-        if (text.startsWith('https://')) {
-          return new Response(JSON.stringify({ short_url: text.trim() }), {
-            headers: { ...corsHeaders(), 'Content-Type': 'application/json' },
-          })
-        }
-      }
-    } catch { /* fallthrough */ }
+    const supabase = getServiceClient()
 
-    // Fallback: is.gd
-    try {
-      const res = await fetch(
-        `https://is.gd/create.php?format=simple&url=${encodeURIComponent(url)}`
-      )
-      if (res.ok) {
-        const text = await res.text()
-        if (text.startsWith('https://')) {
-          return new Response(JSON.stringify({ short_url: text.trim() }), {
-            headers: { ...corsHeaders(), 'Content-Type': 'application/json' },
-          })
-        }
-      }
-    } catch { /* fallthrough */ }
+    // Check if this URL was already shortened
+    const { data: existing } = await supabase
+      .from('short_links')
+      .select('code')
+      .eq('target_url', url)
+      .limit(1)
+      .single()
 
+    if (existing?.code) {
+      const baseUrl = Deno.env.get('SUPABASE_URL')!
+      return new Response(
+        JSON.stringify({ short_url: `${baseUrl}/functions/v1/r/${existing.code}` }),
+        { headers: { ...corsHeaders(), 'Content-Type': 'application/json' } },
+      )
+    }
+
+    // Generate unique code with retry
+    let code = ''
+    for (let attempt = 0; attempt < 5; attempt++) {
+      code = generateCode()
+      const { error } = await supabase
+        .from('short_links')
+        .insert({ code, target_url: url })
+      if (!error) break
+      if (attempt === 4) {
+        return new Response(
+          JSON.stringify({ error: 'Failed to generate unique code' }),
+          { status: 500, headers: { ...corsHeaders(), 'Content-Type': 'application/json' } },
+        )
+      }
+    }
+
+    const baseUrl = Deno.env.get('SUPABASE_URL')!
     return new Response(
-      JSON.stringify({ error: 'All shortening services failed' }),
-      {
-        status: 502,
-        headers: { ...corsHeaders(), 'Content-Type': 'application/json' },
-      }
+      JSON.stringify({ short_url: `${baseUrl}/functions/v1/r/${code}` }),
+      { headers: { ...corsHeaders(), 'Content-Type': 'application/json' } },
     )
   } catch (err) {
     return new Response(
       JSON.stringify({ error: (err as Error).message }),
-      {
-        status: 500,
-        headers: { ...corsHeaders(), 'Content-Type': 'application/json' },
-      }
+      { status: 500, headers: { ...corsHeaders(), 'Content-Type': 'application/json' } },
     )
   }
 })
