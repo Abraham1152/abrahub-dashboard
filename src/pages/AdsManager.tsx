@@ -246,8 +246,6 @@ export default function AdsManagerPage() {
   const [syncError, setSyncError] = useState<string | null>(null)
   const [sortField, setSortField] = useState<SortField>('spend')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
-  const [showConfig, setShowConfig] = useState(false)
-  const [showCreator, setShowCreator] = useState(false)
   const [showGoogleSetup, setShowGoogleSetup] = useState(false)
   const [platform, setPlatform] = useState<Platform>('meta')
   const [moduleTab, setModuleTab] = useState<ModuleTab>('overview')
@@ -535,9 +533,9 @@ export default function AdsManagerPage() {
         <div className="flex items-center gap-2">
           {platform !== 'google' && (
             <button
-              onClick={() => setShowCreator(!showCreator)}
+              onClick={() => setModuleTab('creative')}
               className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-medium transition-all ${
-                showCreator
+                moduleTab === 'creative'
                   ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-lg'
                   : 'bg-white dark:bg-neutral-900 border border-gray-200 dark:border-neutral-800 text-gray-600 dark:text-neutral-400 hover:bg-gray-50 dark:hover:bg-neutral-800'
               }`}
@@ -547,9 +545,9 @@ export default function AdsManagerPage() {
             </button>
           )}
           <button
-            onClick={() => setShowConfig(!showConfig)}
+            onClick={() => setModuleTab('killscale')}
             className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-medium transition-all ${
-              showConfig
+              moduleTab === 'killscale'
                 ? 'bg-blue-100 dark:bg-blue-500/20 text-blue-600 dark:text-blue-400'
                 : 'bg-white dark:bg-neutral-900 border border-gray-200 dark:border-neutral-800 text-gray-600 dark:text-neutral-400 hover:bg-gray-50 dark:hover:bg-neutral-800'
             }`}
@@ -576,7 +574,7 @@ export default function AdsManagerPage() {
         {(['meta', 'google'] as Platform[]).map((p) => (
           <button
             key={p}
-            onClick={() => { setPlatform(p); setShowCreator(false); setShowGoogleSetup(false) }}
+            onClick={() => { setPlatform(p); setShowGoogleSetup(false); setModuleTab('overview') }}
             className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition-all ${
               platform === p
                 ? 'bg-blue-600 text-white shadow-sm'
@@ -602,9 +600,6 @@ export default function AdsManagerPage() {
 
       {/* Google Ads Setup Panel */}
       {showGoogleSetup && <GoogleAdsSetup queryClient={queryClient} />}
-
-      {/* Optimizer Config Panel */}
-      {showConfig && <OptimizerConfig />}
 
       {/* Module Tabs */}
       <div className="flex items-center gap-1 overflow-x-auto pb-1">
@@ -1173,9 +1168,9 @@ function SortHeader({ label, field, current, dir, onSort }: {
   )
 }
 
-// ==================== OPTIMIZER CONFIG ====================
+// ==================== OPTIMIZER CONFIG (legacy — now in KillScaleModule) ====================
 
-function OptimizerConfig() {
+export function OptimizerConfig() {
   const queryClient = useQueryClient()
   const { t } = useTranslation()
   const [saving, setSaving] = useState(false)
