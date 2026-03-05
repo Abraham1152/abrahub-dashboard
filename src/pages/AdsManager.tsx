@@ -1,4 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { KillScaleModule, SandboxModule, CreativeDiversityModule, AnalyticsModule } from './AdsModules'
 import { supabase } from '@/integrations/supabase'
 import { useTheme } from '@/stores/themeStore'
 import { useTranslation } from '@/i18n/useTranslation'
@@ -50,6 +51,14 @@ import {
   ThumbsDown,
   ChevronDown,
   BookOpen,
+  Shield,
+  FlaskConical,
+  Activity,
+  AlertTriangle,
+  Layers,
+  Ghost,
+  Skull,
+  Scale,
 } from 'lucide-react'
 
 // ==================== TYPES ====================
@@ -125,6 +134,7 @@ interface NormalizedCampaign {
 type Platform = 'meta' | 'google'
 type SortField = 'spend' | 'impressions' | 'clicks' | 'ctr' | 'name' | 'cpa' | 'conversions'
 type SortDir = 'asc' | 'desc'
+type ModuleTab = 'overview' | 'killscale' | 'sandbox' | 'creative' | 'analytics'
 
 interface ChatMessage {
   role: 'user' | 'model'
@@ -240,6 +250,7 @@ export default function AdsManagerPage() {
   const [showCreator, setShowCreator] = useState(false)
   const [showGoogleSetup, setShowGoogleSetup] = useState(false)
   const [platform, setPlatform] = useState<Platform>('meta')
+  const [moduleTab, setModuleTab] = useState<ModuleTab>('overview')
 
   // Fetch Meta campaigns
   const { data: metaCampaigns = [], isLoading: loadingMeta } = useQuery({
@@ -288,6 +299,98 @@ export default function AdsManagerPage() {
         .limit(1)
         .single()
       return data as { new_customers: number } | null
+    },
+  })
+
+  // Fetch automation rules
+  const { data: automationRules = [] } = useQuery({
+    queryKey: ['ads-automation-rules'],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from('ads_automation_rules' as any)
+        .select('*')
+        .order('created_at', { ascending: true })
+      return (data || []) as any[]
+    },
+  })
+
+  // Fetch automation log
+  const { data: automationLog = [] } = useQuery({
+    queryKey: ['ads-automation-log'],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from('ads_automation_log' as any)
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(50)
+      return (data || []) as any[]
+    },
+  })
+
+  // Fetch business metrics
+  const { data: _businessMetrics = [] } = useQuery({
+    queryKey: ['ads-business-metrics'],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from('ads_business_metrics' as any)
+        .select('*')
+        .order('date', { ascending: false })
+        .limit(30)
+      return (data || []) as any[]
+    },
+  })
+
+  // Fetch daily ads data for trend analysis
+  const { data: dailyAds = [] } = useQuery({
+    queryKey: ['ads-daily-data'],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from('ads_daily')
+        .select('*')
+        .order('date', { ascending: false })
+        .limit(30)
+      return (data || []) as any[]
+    },
+  })
+
+  // Fetch optimizer config (for Kill & Scale panel)
+  const { data: optimizerConfig } = useQuery({
+    queryKey: ['ads-config'],
+    queryFn: async () => {
+      const { data } = await supabase.from('ads_optimization_config' as any).select('*').single()
+      return data as any
+    },
+  })
+
+  // Fetch revenue — split ads-attributed vs organic
+  const { data: revenueData } = useQuery({
+    queryKey: ['ads-revenue-total'],
+    queryFn: async () => {
+      const thirtyDaysAgo = new Date()
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30)
+      const { data } = await supabase
+        .from('revenue_transactions')
+        .select('amount, status, date, metadata')
+        .gte('date', thirtyDaysAgo.toISOString().split('T')[0])
+        .eq('status', 'paid')
+      const rows = data || []
+      let adsRevenue = 0
+      let organicRevenue = 0
+      let adsCount = 0
+      let organicCount = 0
+      for (const t of rows) {
+        const amt = t.amount || 0
+        const meta = t.metadata as any
+        const hasUtm = meta && (meta.utm_source || meta.utm_campaign || meta.ref || meta.src)
+        if (hasUtm) {
+          adsRevenue += amt
+          adsCount++
+        } else {
+          organicRevenue += amt
+          organicCount++
+        }
+      }
+      return { adsRevenue, organicRevenue, totalRevenue: adsRevenue + organicRevenue, adsCount, organicCount }
     },
   })
 
@@ -344,6 +447,50 @@ export default function AdsManagerPage() {
   const totalImpressions = allNormalized.reduce((s, c) => s + c.impressions, 0)
   const totalClicks = allNormalized.reduce((s, c) => s + c.clicks, 0)
   const avgCtr = totalImpressions > 0 ? (totalClicks / totalImpressions) * 100 : 0
+
+  // Revenue: only ad-attributed counts for MER/ROAS
+  const adsRevenue = revenueData?.adsRevenue || 0
+  const organicRevenue = revenueData?.organicRevenue || 0
+  const totalRevenue30d = revenueData?.totalRevenue || 0
+  // MER uses only ads-attributed revenue (organic = not from ads)
+  const mer = totalSpend > 0 ? adsRevenue / totalSpend : 0
+
+  // Spend distribution — check for 80%+ dominance
+  const spendDominance = allNormalized
+    .filter(c => c.spend > 0)
+    .map(c => ({ name: c.name, spend: c.spend, pct: totalSpend > 0 ? (c.spend / totalSpend) * 100 : 0 }))
+    .sort((a, b) => b.pct - a.pct)
+  const dominantCampaign = spendDominance.length > 0 && spendDominance[0].pct > 80 ? spendDominance[0] : null
+
+  // Campaigns with alerts (kill rule candidates)
+  const killCandidates = allNormalized.filter(c => {
+    const isActive = c.status === 'ACTIVE' || c.status === 'ENABLED'
+    if (!isActive) return false
+    // Low CTR with spend
+    if (c.spend > 20 && c.ctr < 0.5) return true
+    // 2x CPA with no conversions
+    if (avgCpa > 0 && c.spend > avgCpa * 2 && c.conversions === 0) return true
+    return false
+  })
+
+  // Scale candidates
+  const scaleCandidates = allNormalized.filter(c => {
+    const isActive = c.status === 'ACTIVE' || c.status === 'ENABLED'
+    if (!isActive || c.conversions < 3) return false
+    if (avgCpa > 0 && c.cpa > 0 && c.cpa < avgCpa) return true
+    return false
+  })
+
+  // Champion vs Challenger counts
+  const champions = allNormalized.filter((c: any) => c.campaign_tag === 'champion')
+  const challengers = allNormalized.filter((c: any) => c.campaign_tag === 'challenger')
+
+  // NC% (new customer percentage)
+  const ncPct = newCustomers > 0 && totalConversions > 0 ? (newCustomers / totalConversions) * 100 : 0
+
+  // Creative diversity score (based on unique campaign names/themes)
+  const uniqueThemes = new Set(allNormalized.map((c: any) => c.creative_theme || 'untagged'))
+  const diversityScore = Math.min(10, uniqueThemes.size * 2)
 
   // Chart data
   const chartData = allNormalized
@@ -456,85 +603,221 @@ export default function AdsManagerPage() {
       {/* Google Ads Setup Panel */}
       {showGoogleSetup && <GoogleAdsSetup queryClient={queryClient} />}
 
-      {/* AI Ad Creator Wizard — Meta only */}
-      {showCreator && platform !== 'google' && <AdCreatorWizard onClose={() => setShowCreator(false)} queryClient={queryClient} />}
-
       {/* Optimizer Config Panel */}
       {showConfig && <OptimizerConfig />}
 
-      {/* Pending Approval Cards */}
+      {/* Module Tabs */}
+      <div className="flex items-center gap-1 overflow-x-auto pb-1">
+        {([
+          { id: 'overview' as ModuleTab, label: 'Visao Geral', icon: BarChart3, badge: killCandidates.length > 0 ? killCandidates.length : undefined },
+          { id: 'killscale' as ModuleTab, label: 'Kill & Scale', icon: Shield, badge: killCandidates.length + scaleCandidates.length || undefined },
+          { id: 'sandbox' as ModuleTab, label: 'Sandbox', icon: FlaskConical },
+          { id: 'creative' as ModuleTab, label: 'Criativo IA', icon: Sparkles },
+          { id: 'analytics' as ModuleTab, label: 'Analytics', icon: Activity },
+        ]).map(tab => {
+          const Icon = tab.icon
+          return (
+            <button
+              key={tab.id}
+              onClick={() => setModuleTab(tab.id)}
+              className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-all ${
+                moduleTab === tab.id
+                  ? 'bg-gradient-to-r from-indigo-600 to-blue-600 text-white shadow-lg shadow-indigo-500/20'
+                  : 'bg-white dark:bg-neutral-900 border border-gray-200 dark:border-neutral-800 text-gray-500 dark:text-neutral-400 hover:bg-gray-50 dark:hover:bg-neutral-800'
+              }`}
+            >
+              <Icon size={14} />
+              {tab.label}
+              {tab.badge && (
+                <span className={`ml-1 px-1.5 py-0.5 rounded-full text-[9px] font-bold ${
+                  moduleTab === tab.id ? 'bg-white/20 text-white' : 'bg-red-100 dark:bg-red-500/20 text-red-600 dark:text-red-400'
+                }`}>
+                  {tab.badge}
+                </span>
+              )}
+            </button>
+          )
+        })}
+      </div>
+
+      {/* Pending Approval Cards — always visible */}
       <PendingApprovalCards platform={platform} />
 
-      {/* 6 KPI Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-        <KPICard icon={Wallet} label={t('ads.total_spend')} value={BRL(totalSpend)} accent="red" sub={t('ads.last_30_days')} />
-        <KPICard icon={DollarSign} label={t('ads.cac')} value={cac > 0 ? BRL(cac) : '-'} accent="amber" sub={`${newCustomers} ${t('ads.new_clients')}`} />
-        <KPICard icon={TrendingUp} label={t('ads.avg_ctr')} value={avgCtr > 0 ? `${avgCtr.toFixed(2)}%` : '-'} accent={avgCtr >= 1 ? 'emerald' : 'amber'} sub={`${fmtNum(totalClicks)} clicks`} />
-        <KPICard icon={Zap} label={t('ads.conversions')} value={fmtNum(totalConversions)} accent="blue" />
-        <KPICard icon={Target} label={t('ads.active_label')} value={String(activeCampaigns)} accent="emerald" />
-        <KPICard icon={Users} label={t('ads.avg_cpa')} value={avgCpa > 0 ? BRL(avgCpa) : '-'} accent="purple" />
-      </div>
+      {/* ==================== OVERVIEW TAB ==================== */}
+      {moduleTab === 'overview' && (
+        <>
+          {/* 8 KPI Cards — 4 Pillars */}
+          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3">
+            <KPICard icon={Wallet} label={t('ads.total_spend')} value={BRL(totalSpend)} accent="red" sub={t('ads.last_30_days')} />
+            <KPICard icon={DollarSign} label="CAC" value={cac > 0 ? BRL(cac) : '-'} accent="amber" sub={`${newCustomers} novos`} />
+            <KPICard icon={TrendingUp} label="CTR" value={avgCtr > 0 ? `${avgCtr.toFixed(2)}%` : '-'} accent={avgCtr >= 1 ? 'emerald' : 'amber'} sub={`${fmtNum(totalClicks)} clicks`} />
+            <KPICard icon={Zap} label="Conversoes" value={fmtNum(totalConversions)} accent="blue" />
+            <KPICard icon={Scale} label="MER (Ads)" value={mer > 0 ? `${mer.toFixed(2)}x` : '-'} accent={mer >= 2 ? 'emerald' : 'amber'} sub={`Ads: ${BRL(adsRevenue)}`} />
+            <KPICard icon={Users} label="NC%" value={ncPct > 0 ? `${ncPct.toFixed(0)}%` : '-'} accent={ncPct >= 60 ? 'emerald' : ncPct >= 50 ? 'amber' : 'red'} sub={ncPct < 50 ? 'ALERTA' : 'Saudavel'} />
+            <KPICard icon={Target} label="Ativas" value={String(activeCampaigns)} accent="emerald" />
+            <KPICard icon={Layers} label="Diversidade" value={`${diversityScore}/10`} accent={diversityScore >= 6 ? 'emerald' : 'amber'} sub={`${uniqueThemes.size} temas`} />
+          </div>
 
-      {/* Chart + Status */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <div className="lg:col-span-2 card p-5">
-          <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
-            <BarChart3 size={16} className="text-blue-500" />
-            {t('ads.spend_by_campaign')}
-          </h3>
-          {chartData.length > 0 ? (
-            <ResponsiveContainer width="100%" height={280}>
-              <BarChart data={chartData} layout="vertical" margin={{ left: 0, right: 16, top: 0, bottom: 0 }}>
-                <XAxis type="number" tickFormatter={(v) => `R$${v}`} tick={{ fill: isDark ? '#737373' : '#9ca3af', fontSize: 11 }} axisLine={false} tickLine={false} />
-                <YAxis dataKey="name" type="category" width={160} tick={{ fill: isDark ? '#d4d4d4' : '#374151', fontSize: 11 }} axisLine={false} tickLine={false} />
-                <Tooltip formatter={(value: number) => [BRL(value), t('ads.spend')]} contentStyle={{ background: isDark ? '#262626' : '#fff', border: `1px solid ${isDark ? '#404040' : '#e5e7eb'}`, borderRadius: '12px', fontSize: '12px' }} />
-                <Bar dataKey="spend" radius={[0, 6, 6, 0]}>
-                  {chartData.map((_, i) => (
-                    <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          ) : (
-            <div className="flex items-center justify-center h-[280px] text-gray-400 dark:text-neutral-600 text-sm">
-              {t('ads.no_spend')}
+          {/* Revenue Attribution Bar */}
+          {totalRevenue30d > 0 && (
+            <div className="flex items-center gap-4 p-3 rounded-xl bg-gray-50 dark:bg-neutral-800/50 border border-gray-200 dark:border-neutral-700/50">
+              <div className="flex items-center gap-2 flex-1">
+                <DollarSign size={14} className="text-emerald-500 shrink-0" />
+                <span className="text-xs text-gray-500 dark:text-neutral-400">Receita 30d:</span>
+                <span className="text-xs font-bold text-gray-900 dark:text-white">{BRL(totalRevenue30d)}</span>
+                <span className="text-[10px] text-gray-400 dark:text-neutral-500 mx-1">|</span>
+                <span className="text-xs text-emerald-600 dark:text-emerald-400 font-semibold">Ads: {BRL(adsRevenue)}</span>
+                <span className="text-[10px] text-gray-400 dark:text-neutral-500">({totalRevenue30d > 0 ? ((adsRevenue / totalRevenue30d) * 100).toFixed(0) : 0}%)</span>
+                <span className="text-[10px] text-gray-400 dark:text-neutral-500 mx-1">|</span>
+                <span className="text-xs text-blue-600 dark:text-blue-400 font-semibold">Organica: {BRL(organicRevenue)}</span>
+                <span className="text-[10px] text-gray-400 dark:text-neutral-500">({totalRevenue30d > 0 ? ((organicRevenue / totalRevenue30d) * 100).toFixed(0) : 0}%)</span>
+              </div>
+              <span className="text-[10px] text-gray-400 dark:text-neutral-500 italic">Sem UTM = organica</span>
             </div>
           )}
-        </div>
 
-        <div className="card p-5">
-          <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-4">{t('ads.campaign_status')}</h3>
-          <div className="space-y-3">
-            {Object.entries(statusBreakdown).map(([status, count]) => {
-              const cfg = statusConfig[status] || { key: status, color: 'bg-gray-100 text-gray-500', icon: HelpCircle }
-              const Icon = cfg.icon
-              return (
-                <div key={status} className="flex items-center justify-between">
-                  <span className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold ${cfg.color}`}>
-                    <Icon size={12} /> {t(cfg.key)}
-                  </span>
-                  <span className="text-lg font-bold text-gray-900 dark:text-white">{count}</span>
+          {/* Alerts Bar */}
+          {(killCandidates.length > 0 || dominantCampaign || ncPct < 50) && (
+            <div className="space-y-2">
+              {killCandidates.length > 0 && (
+                <div className="flex items-center gap-2 p-3 rounded-xl bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-800/50">
+                  <Skull size={16} className="text-red-500 shrink-0" />
+                  <p className="text-xs text-red-700 dark:text-red-400">
+                    <b>{killCandidates.length} anuncio(s)</b> candidatos a pausa: gasto alto com baixo CTR ou sem conversoes.
+                    <button onClick={() => setModuleTab('killscale')} className="ml-2 underline font-semibold">Ver Kill & Scale</button>
+                  </p>
                 </div>
-              )
-            })}
-          </div>
-          <div className="mt-6 pt-4 border-t border-gray-100 dark:border-neutral-800">
-            <p className="text-xs text-gray-500 dark:text-neutral-500">{t('ads.total')}</p>
-            <p className="text-3xl font-bold text-gray-900 dark:text-white">{allNormalized.length}</p>
-          </div>
-        </div>
-      </div>
+              )}
+              {dominantCampaign && (
+                <div className="flex items-center gap-2 p-3 rounded-xl bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-800/50">
+                  <AlertTriangle size={16} className="text-amber-500 shrink-0" />
+                  <p className="text-xs text-amber-700 dark:text-amber-400">
+                    <b>Distribuicao desbalanceada:</b> "{dominantCampaign.name.substring(0, 30)}" consome <b>{dominantCampaign.pct.toFixed(0)}%</b> do orcamento. Diversifique os criativos.
+                  </p>
+                </div>
+              )}
+              {ncPct > 0 && ncPct < 50 && (
+                <div className="flex items-center gap-2 p-3 rounded-xl bg-purple-50 dark:bg-purple-500/10 border border-purple-200 dark:border-purple-800/50">
+                  <Ghost size={16} className="text-purple-500 shrink-0" />
+                  <p className="text-xs text-purple-700 dark:text-purple-400">
+                    <b>Alerta de Crescimento Fantasma:</b> NC% em {ncPct.toFixed(0)}% (abaixo de 50%). A IA pode estar mostrando anuncios para quem ja ia comprar.
+                    <button onClick={() => setModuleTab('analytics')} className="ml-2 underline font-semibold">Ver Analytics</button>
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
 
-      {/* Campaigns Table */}
-      <CampaignTable campaigns={sorted} sortField={sortField} sortDir={sortDir} toggleSort={toggleSort} queryClient={queryClient} />
+          {/* Chart + Status + Spend Distribution */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            <div className="lg:col-span-2 card p-5">
+              <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
+                <BarChart3 size={16} className="text-blue-500" />
+                {t('ads.spend_by_campaign')}
+              </h3>
+              {chartData.length > 0 ? (
+                <ResponsiveContainer width="100%" height={280}>
+                  <BarChart data={chartData} layout="vertical" margin={{ left: 0, right: 16, top: 0, bottom: 0 }}>
+                    <XAxis type="number" tickFormatter={(v) => `R$${v}`} tick={{ fill: isDark ? '#737373' : '#9ca3af', fontSize: 11 }} axisLine={false} tickLine={false} />
+                    <YAxis dataKey="name" type="category" width={160} tick={{ fill: isDark ? '#d4d4d4' : '#374151', fontSize: 11 }} axisLine={false} tickLine={false} />
+                    <Tooltip formatter={(value: number) => [BRL(value), t('ads.spend')]} contentStyle={{ background: isDark ? '#262626' : '#fff', border: `1px solid ${isDark ? '#404040' : '#e5e7eb'}`, borderRadius: '12px', fontSize: '12px' }} />
+                    <Bar dataKey="spend" radius={[0, 6, 6, 0]}>
+                      {chartData.map((_, i) => (
+                        <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="flex items-center justify-center h-[280px] text-gray-400 dark:text-neutral-600 text-sm">
+                  {t('ads.no_spend')}
+                </div>
+              )}
+            </div>
 
-      {/* AI Chat + Action History */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2">
-          <AdsAgentChat />
-        </div>
-        <ActionHistory platform={platform} />
-      </div>
+            <div className="card p-5">
+              <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-4">{t('ads.campaign_status')}</h3>
+              <div className="space-y-3">
+                {Object.entries(statusBreakdown).map(([status, count]) => {
+                  const cfg = statusConfig[status] || { key: status, color: 'bg-gray-100 text-gray-500', icon: HelpCircle }
+                  const Icon = cfg.icon
+                  return (
+                    <div key={status} className="flex items-center justify-between">
+                      <span className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold ${cfg.color}`}>
+                        <Icon size={12} /> {t(cfg.key)}
+                      </span>
+                      <span className="text-lg font-bold text-gray-900 dark:text-white">{count}</span>
+                    </div>
+                  )
+                })}
+              </div>
+              <div className="mt-6 pt-4 border-t border-gray-100 dark:border-neutral-800">
+                <p className="text-xs text-gray-500 dark:text-neutral-500">{t('ads.total')}</p>
+                <p className="text-3xl font-bold text-gray-900 dark:text-white">{allNormalized.length}</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Campaigns Table */}
+          <CampaignTable campaigns={sorted} sortField={sortField} sortDir={sortDir} toggleSort={toggleSort} queryClient={queryClient} />
+
+          {/* AI Chat + Action History */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div className="lg:col-span-2">
+              <AdsAgentChat />
+            </div>
+            <ActionHistory platform={platform} />
+          </div>
+        </>
+      )}
+
+      {/* ==================== KILL & SCALE TAB ==================== */}
+      {moduleTab === 'killscale' && (
+        <KillScaleModule
+          killCandidates={killCandidates}
+          scaleCandidates={scaleCandidates}
+          automationRules={automationRules}
+          automationLog={automationLog}
+          queryClient={queryClient}
+          config={optimizerConfig}
+        />
+      )}
+
+      {/* ==================== SANDBOX TAB ==================== */}
+      {moduleTab === 'sandbox' && (
+        <SandboxModule
+          campaigns={allNormalized}
+          champions={champions}
+          challengers={challengers}
+          queryClient={queryClient}
+        />
+      )}
+
+      {/* ==================== CREATIVE LAB TAB ==================== */}
+      {moduleTab === 'creative' && (
+        <>
+          <AdCreatorWizard onClose={() => setModuleTab('overview')} queryClient={queryClient} />
+          <CreativeDiversityModule campaigns={allNormalized} diversityScore={diversityScore} />
+        </>
+      )}
+
+      {/* ==================== ANALYTICS TAB ==================== */}
+      {moduleTab === 'analytics' && (
+        <AnalyticsModule
+          campaigns={allNormalized}
+          totalSpend={totalSpend}
+          totalRevenue={adsRevenue}
+          mer={mer}
+          ncPct={ncPct}
+          newCustomers={newCustomers}
+          totalConversions={totalConversions}
+          avgCpa={avgCpa}
+          avgCtr={avgCtr}
+          dailyAds={dailyAds}
+          spendDominance={spendDominance}
+          isDark={isDark}
+        />
+      )}
     </div>
   )
 }
@@ -2055,12 +2338,54 @@ function AdCreatorWizard({ onClose, queryClient }: { onClose: () => void; queryC
 
       {/* Step 4: Success */}
       {step === 4 && result && (
-        <div className="text-center py-4">
-          <div className="w-14 h-14 rounded-full bg-emerald-100 dark:bg-emerald-500/20 flex items-center justify-center mx-auto mb-3">
-            <CheckCircle size={28} className="text-emerald-600 dark:text-emerald-400" />
+        <div className="py-4">
+          <div className="text-center">
+            <div className="w-14 h-14 rounded-full bg-emerald-100 dark:bg-emerald-500/20 flex items-center justify-center mx-auto mb-3">
+              <CheckCircle size={28} className="text-emerald-600 dark:text-emerald-400" />
+            </div>
+            <h4 className="text-lg font-bold text-gray-900 dark:text-white mb-1">{t('ads.campaign_created')}</h4>
+            <p className="text-xs text-amber-600 dark:text-amber-400 mb-4">{t('ads.campaign_paused_note')}</p>
           </div>
-          <h4 className="text-lg font-bold text-gray-900 dark:text-white mb-1">{t('ads.campaign_created')}</h4>
-          <p className="text-xs text-amber-600 dark:text-amber-400 mb-4">{t('ads.campaign_paused_note')}</p>
+
+          {/* AI Strategy Summary */}
+          {strategy && (
+            <div className="mb-5 p-4 rounded-xl bg-indigo-50/70 dark:bg-indigo-500/10 border border-indigo-200 dark:border-indigo-800/50">
+              <div className="flex items-center gap-2 mb-3">
+                <Sparkles size={14} className="text-indigo-600 dark:text-indigo-400" />
+                <h5 className="text-xs font-bold text-indigo-700 dark:text-indigo-300">{t('ads.strategy_summary') || 'Estratégia da IA'}</h5>
+              </div>
+              {strategy.reasoning && (
+                <p className="text-[11px] text-indigo-600 dark:text-indigo-400 leading-relaxed mb-3 italic">{strategy.reasoning}</p>
+              )}
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {[
+                  { label: t('ads.campaign_name'), value: strategy.campaign_name },
+                  { label: t('ads.daily_budget_label'), value: `R$ ${strategy.daily_budget_brl}` },
+                  { label: t('ads.age_range'), value: `${strategy.age_min}–${strategy.age_max} anos` },
+                  { label: t('ads.cta_label'), value: strategy.cta_type.replace(/_/g, ' ') },
+                  { label: 'Gênero', value: strategy.gender === 'all' ? 'Todos' : strategy.gender === 'male' ? 'Masculino' : 'Feminino' },
+                ].map(item => (
+                  <div key={item.label} className="p-2 rounded-lg bg-white/60 dark:bg-neutral-800/60">
+                    <p className="text-[10px] text-indigo-400 dark:text-indigo-500">{item.label}</p>
+                    <p className="text-[11px] font-semibold text-indigo-700 dark:text-indigo-300">{item.value}</p>
+                  </div>
+                ))}
+              </div>
+              {strategy.interests.length > 0 && (
+                <div className="mt-3">
+                  <p className="text-[10px] text-indigo-400 dark:text-indigo-500 mb-1.5">{t('ads.interests') || 'Interesses'}</p>
+                  <div className="flex flex-wrap gap-1">
+                    {strategy.interests.map((kw, i) => (
+                      <span key={i} className="px-2 py-0.5 rounded-full bg-white/70 dark:bg-neutral-800/70 text-[10px] font-medium text-indigo-600 dark:text-indigo-400 border border-indigo-200/50 dark:border-indigo-700/50">
+                        {kw}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="grid grid-cols-2 gap-2 max-w-sm mx-auto mb-4">
             {[
               ['Campaign', result.campaign_id],
@@ -2074,12 +2399,14 @@ function AdCreatorWizard({ onClose, queryClient }: { onClose: () => void; queryC
               </div>
             ))}
           </div>
-          <button
-            onClick={onClose}
-            className="px-5 py-2 rounded-xl text-sm font-medium bg-gray-100 dark:bg-neutral-800 text-gray-700 dark:text-neutral-300 hover:bg-gray-200 dark:hover:bg-neutral-700 transition-colors"
-          >
-            {t('ads.close_creator') || 'Fechar'}
-          </button>
+          <div className="text-center">
+            <button
+              onClick={onClose}
+              className="px-5 py-2 rounded-xl text-sm font-medium bg-gray-100 dark:bg-neutral-800 text-gray-700 dark:text-neutral-300 hover:bg-gray-200 dark:hover:bg-neutral-700 transition-colors"
+            >
+              {t('ads.close_creator') || 'Fechar'}
+            </button>
+          </div>
         </div>
       )}
     </div>
